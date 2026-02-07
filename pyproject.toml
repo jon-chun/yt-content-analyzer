@@ -1,0 +1,89 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yt-content-analyzer"
+version = "0.2.1"
+description = "Scrape-first YouTube comments + transcripts collection and analysis with resumable runs."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name="Your Name / Org"}]
+keywords = ["youtube", "scraping", "comments", "transcripts", "nlp", "research"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
+dependencies = [
+  "pydantic>=2.5",
+  "pydantic-settings>=2.0",
+  "PyYAML>=6.0",
+  "click>=8.1",
+  "rich>=13.0",
+  "tqdm>=4.66",
+  "python-dateutil>=2.8",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.5",
+  "mypy>=1.8",
+  "build>=1.2",
+  "twine>=5.0",
+]
+scrape = [
+  "playwright>=1.45",
+  "yt-dlp>=2024.10.0",
+]
+nlp = [
+  "numpy>=1.26",
+  "pandas>=2.0",
+]
+reports = [
+  "Jinja2>=3.1",
+]
+kg = [
+  "rdflib>=7.0",
+  "networkx>=3.2",
+  "pyvis>=0.3",
+]
+
+[project.scripts]
+ytca = "yt_content_analyzer.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/<org>/yt-content-analyzer"
+Repository = "https://github.com/<org>/yt-content-analyzer"
+Issues = "https://github.com/<org>/yt-content-analyzer/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/yt_content_analyzer"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/yt_content_analyzer/**",
+  "README.md",
+  "LICENSE",
+  "docs/**",
+  "config.example.yaml",
+  ".env.example",
+  "tests/**",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
