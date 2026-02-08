@@ -1,9 +1,31 @@
 from __future__ import annotations
-from pydantic import BaseModel, Field
+import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import yaml
 from pathlib import Path
 from typing import Any, Optional
+
+# Canonical env var names per provider — code resolves API keys at runtime,
+# so users only need standard env vars (OPENAI_API_KEY, etc.)
+PROVIDER_API_KEY_ENV: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "google": "GOOGLE_API_KEY",
+    "xai": "XAI_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "fireworks": "FIREWORKS_API_KEY",
+    "together": "TOGETHER_API_KEY",
+}
+
+def resolve_api_key(provider: str) -> str | None:
+    """Resolve API key from canonical environment variable for a given provider."""
+    if provider in ("local", "ollama", "none", ""):
+        return None
+    env_var = PROVIDER_API_KEY_ENV.get(provider)
+    if env_var:
+        return os.environ.get(env_var)
+    return None
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="allow")
@@ -27,7 +49,7 @@ class Settings(BaseSettings):
     ROBUST_OVER_SPEED: bool = True
     MAX_COMMENT_THREAD_DEPTH: int = 5
     MAX_RETRY_SCRAPE: int = 3
-    COLLECT_SORT_MODES: list[str] = ["top","newest"]
+    COLLECT_SORT_MODES: list[str] = ["top", "newest"]
     MAX_COMMENTS_PER_VIDEO: int = 200_000
     CAPTURE_ARTIFACTS_ON_ERROR: bool = True
     CAPTURE_ARTIFACTS_ALWAYS: bool = False
@@ -44,7 +66,7 @@ class Settings(BaseSettings):
     TRANSCRIPT_CHUNK_SECONDS: int = 60
     TRANSCRIPT_CHUNK_OVERLAP_SECONDS: int = 10
 
-    # Rate limiting
+    # Rate limiting / API safeguards
     API_MAX_CONCURRENT_CALLS: int = 2
     API_RATE_LIMIT_RPS: float = 2.0
     API_RATE_LIMIT_BURST: int = 4
@@ -53,29 +75,22 @@ class Settings(BaseSettings):
     API_JITTER_MS_MAX: int = 900
     API_TIMEOUT_S: int = 30
     API_MAX_RETRIES: int = 3
+    BACKOFF_BASE_SECONDS: float = 2.0
+    BACKOFF_MAX_SECONDS: float = 60.0
 
-    # Translation
+    # Translation — provider-based auth (API key resolved from env)
     AUTO_TRANSLATE: bool = False
-    AUTO_TRANSLATE_LOCAL: bool = False
-    TRANSLATE_REMOTE_ENDPOINT: Optional[str] = None
-    TRANSLATE_REMOTE_AUTH_TYPE: str = "none"
-    TRANSLATE_REMOTE_AUTH_VALUE: Optional[str] = None
-    TRANSLATE_REMOTE_MODEL: Optional[str] = None
-    TRANSLATE_LOCAL_ENDPOINT: str = "http://localhost:1234/v1"
-    TRANSLATE_LOCAL_MODEL: Optional[str] = None
+    TRANSLATE_PROVIDER: str = "local"       # openai|anthropic|google|deepseek|local
+    TRANSLATE_MODEL: Optional[str] = None
+    TRANSLATE_ENDPOINT: str = "http://localhost:1234/v1"   # for local provider
     TRANSLATE_TIMEOUT_S: int = 30
     TRANSLATE_MAX_RETRIES: int = 3
 
-    # Embeddings
+    # Embeddings — provider-based auth (API key resolved from env)
     EMBEDDINGS_ENABLE: bool = True
-    EMBEDDINGS_LOCAL: bool = True
-    EMBEDDINGS_REMOTE: bool = False
-    EMBEDDINGS_LOCAL_ENDPOINT: str = "http://localhost:1234/v1"
-    EMBEDDINGS_LOCAL_MODEL: Optional[str] = None
-    EMBEDDINGS_REMOTE_ENDPOINT: Optional[str] = None
-    EMBEDDINGS_REMOTE_MODEL: Optional[str] = None
-    EMBEDDINGS_REMOTE_AUTH_TYPE: str = "none"
-    EMBEDDINGS_REMOTE_AUTH_VALUE: Optional[str] = None
+    EMBEDDINGS_PROVIDER: str = "local"      # openai|google|local
+    EMBEDDINGS_MODEL: Optional[str] = None
+    EMBEDDINGS_ENDPOINT: str = "http://localhost:1234/v1"  # for local provider
     EMBEDDINGS_TIMEOUT_S: int = 30
     EMBEDDINGS_MAX_RETRIES: int = 3
 
@@ -86,14 +101,77 @@ class Settings(BaseSettings):
     TOPIC_FALLBACK_PER_VIDEO_SUMMARY: bool = True
     TOPIC_FALLBACK_SUMMARY_MODE: str = "heuristic"
 
+    # LLM — for topic extraction via LLM, triples, etc.
+    LLM_PROVIDER: Optional[str] = None      # openai|anthropic|google|xai|deepseek|local
+    LLM_MODEL: Optional[str] = None
+    LLM_ENDPOINT: Optional[str] = None      # for local provider
+
+    # YouTube Data API (rare fallback for discovery)
+    YOUTUBE_API_KEY: Optional[str] = None
+
     # NLP toggles
     TM_CLUSTERING: str = "nlp"
     SA_GRANULARITY: list[str] = ["polarity"]
     STRIP_PII: bool = False
 
     # Reporting
-    REPORT_VARIANTS: list[str] = ["all","by-term","by-vid"]
+    REPORT_VARIANTS: list[str] = ["all", "by-term", "by-vid"]
     RUN_DESC_4WORDS: str = "run_desc"
+
+    # Pricing — USD per 1M tokens, for cost estimation in preflight / dry-run.
+    # Follows config-ref.yml pattern: provider → model → {input, output}.
+    # Use "_default" as fallback when a specific model isn't listed.
+    PRICING_USD_PER_1M_TOKENS: dict[str, Any] = {
+        "openai": {
+            "gpt-5-mini":               {"input": 0.25, "output": 2.00},
+            "gpt-4o-mini":              {"input": 0.15, "output": 0.60},
+            "gpt-4o":                   {"input": 2.50, "output": 10.00},
+            "text-embedding-3-small":   {"input": 0.02, "output": 0.0},
+            "text-embedding-3-large":   {"input": 0.13, "output": 0.0},
+            "_default":                 {"input": 1.25, "output": 10.00},
+        },
+        "anthropic": {
+            "claude-haiku-4-5":   {"input": 1.00, "output": 5.00},
+            "claude-sonnet-4-5":  {"input": 3.00, "output": 15.00},
+            "_default":           {"input": 3.00, "output": 15.00},
+        },
+        "google": {
+            "gemini-3-flash-preview":  {"input": 0.50, "output": 3.00},
+            "gemini-3-pro-preview":    {"input": 2.00, "output": 12.00},
+            "text-embedding-004":      {"input": 0.006, "output": 0.0},
+            "_default":                {"input": 2.00, "output": 12.00},
+        },
+        "xai": {
+            "grok-4-1-fast":  {"input": 0.20, "output": 0.50},
+            "_default":       {"input": 0.20, "output": 0.50},
+        },
+        "deepseek": {
+            "deepseek-chat":  {"input": 0.14, "output": 0.28},
+            "_default":       {"input": 0.14, "output": 0.28},
+        },
+        "fireworks": {
+            "deepseek-v3p2":  {"input": 0.56, "output": 1.68},
+            "_default":       {"input": 1.00, "output": 5.00},
+        },
+        "together": {
+            "_default": {"input": 0.15, "output": 0.60},
+        },
+        "local": {
+            "_default": {"input": 0.0, "output": 0.0},
+        },
+        "ollama": {
+            "_default": {"input": 0.0, "output": 0.0},
+        },
+    }
+
+
+def resolve_pricing(cfg: Settings, provider: str, model: str | None) -> dict[str, float]:
+    """Look up per-token pricing for a provider/model pair. Returns {input, output}."""
+    provider_prices = cfg.PRICING_USD_PER_1M_TOKENS.get(provider, {})
+    if model and model in provider_prices:
+        return provider_prices[model]
+    return provider_prices.get("_default", {"input": 0.0, "output": 0.0})
+
 
 def load_settings(config_path: str | Path | None) -> Settings:
     if config_path is None:

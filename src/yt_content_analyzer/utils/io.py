@@ -1,7 +1,22 @@
 from __future__ import annotations
 from pathlib import Path
-import csv, json
+import csv
+import json
 from typing import Iterable, Mapping, Any
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    """Read all rows from a JSONL file. Returns [] if file doesn't exist."""
+    if not path.exists():
+        return []
+    rows: list[dict] = []
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
 
 def write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

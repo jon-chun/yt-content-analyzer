@@ -91,22 +91,22 @@ Optional defaults:
 - `TRANSCRIPT_CHUNK_SECONDS=60`
 - `TRANSCRIPT_CHUNK_OVERLAP_SECONDS=10`
 
-### 4.5 Translation (locked behavior)
+### 4.5 Translation (provider-based auth)
 - `AUTO_TRANSLATE=False`
-- `AUTO_TRANSLATE_LOCAL=False`
+- `TRANSLATE_PROVIDER='local'`  # openai|anthropic|google|deepseek|local
+- `TRANSLATE_MODEL=None`
+- `TRANSLATE_ENDPOINT='http://localhost:1234/v1'`  # for local provider only
+- `TRANSLATE_TIMEOUT_S=30`, `TRANSLATE_MAX_RETRIES=3`
 If `AUTO_TRANSLATE=True`, translate **comments and transcripts** to `VIDEO_LANG_MAIN`.
-Provider configuration is defined in config file:
-- `TRANSLATE_REMOTE_ENDPOINT`, `TRANSLATE_REMOTE_AUTH_TYPE`, `TRANSLATE_REMOTE_AUTH_VALUE`, `TRANSLATE_REMOTE_MODEL`
-- `TRANSLATE_LOCAL_ENDPOINT`, `TRANSLATE_LOCAL_MODEL`
-- `TRANSLATE_TIMEOUT_S`, `TRANSLATE_MAX_RETRIES`
+API key is resolved at runtime from canonical env var (e.g. `OPENAI_API_KEY`) based on `TRANSLATE_PROVIDER`.
 
-### 4.6 Embeddings (local/remote with fallback)
+### 4.6 Embeddings (provider-based auth with fallback)
 - `EMBEDDINGS_ENABLE=True`
-- `EMBEDDINGS_LOCAL=True`
-- `EMBEDDINGS_REMOTE=False`
-Config file:
-- `EMBEDDINGS_LOCAL_ENDPOINT`, `EMBEDDINGS_LOCAL_MODEL`
-- `EMBEDDINGS_REMOTE_ENDPOINT`, `EMBEDDINGS_REMOTE_MODEL`, `EMBEDDINGS_REMOTE_AUTH_*`
+- `EMBEDDINGS_PROVIDER='local'`  # openai|google|local
+- `EMBEDDINGS_MODEL=None`
+- `EMBEDDINGS_ENDPOINT='http://localhost:1234/v1'`  # for local provider only
+- `EMBEDDINGS_TIMEOUT_S=30`, `EMBEDDINGS_MAX_RETRIES=3`
+API key is resolved at runtime from canonical env var based on `EMBEDDINGS_PROVIDER`.
 Fallback:
 - `EMBEDDINGS_FALLBACK_TO_SAMPLING=True`
 - `TOPIC_SAMPLING_MAX_COMMENTS_PER_VIDEO=5000`

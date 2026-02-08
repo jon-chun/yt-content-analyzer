@@ -19,6 +19,10 @@ class CheckpointStore:
     def save(self, data: dict[str, Any]) -> None:
         self.path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
+    def is_done(self, unit_key: str, stage: str) -> bool:
+        data = self.load()
+        return data.get("UNITS", {}).get(unit_key, {}).get(stage) == "DONE"
+
     def mark(self, unit_key: str, stage: str, status: str = "DONE") -> None:
         data = self.load()
         units = data.setdefault("UNITS", {})

@@ -47,6 +47,8 @@ scrape = [
 nlp = [
   "numpy>=1.26",
   "pandas>=2.0",
+  "scikit-learn>=1.4",
+  "textblob>=0.18",
 ]
 reports = [
   "Jinja2>=3.1",
