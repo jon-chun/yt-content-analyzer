@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 120" width="480" height="120">
+  <!-- Play button rounded rectangle -->
+  <rect x="8" y="16" width="88" height="88" rx="18" fill="#DC2626"/>
+  <!-- Play triangle -->
+  <polygon points="40,36 40,84 76,60" fill="#1E293B"/>
+  <!-- Sift lines (three horizontal bars emerging from play button) -->
+  <line x1="100" y1="40" x2="128" y2="40" stroke="#1E293B" stroke-width="4" stroke-linecap="round"/>
+  <line x1="100" y1="60" x2="136" y2="60" stroke="#1E293B" stroke-width="4" stroke-linecap="round"/>
+  <line x1="100" y1="80" x2="122" y2="80" stroke="#1E293B" stroke-width="4" stroke-linecap="round"/>
+  <!-- Word mark -->
+  <text x="148" y="82" font-family="'Helvetica Neue', Arial, sans-serif" font-size="64" font-weight="800" letter-spacing="-2">
+    <tspan fill="#DC2626">Tube</tspan><tspan fill="#1E293B">Sift</tspan>
+  </text>
+</svg>
