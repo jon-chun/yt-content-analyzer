@@ -32,7 +32,6 @@ INCLUDE_SHORTS: false
 # =============================================================================
 # COLLECTION BEHAVIOR
 # =============================================================================
-ROBUST_OVER_SPEED: true
 MAX_COMMENT_THREAD_DEPTH: 5
 MAX_RETRY_SCRAPE: 3
 COLLECT_SORT_MODES: ["top", "newest"]

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import Settings
-from .exceptions import PreflightError
+from .exceptions import CollectionError, PreflightError
 from .models import RunResult
 from .preflight.checks import run_preflight
 from .utils.logger import setup_file_handler
@@ -69,7 +69,9 @@ def _build_video_list(cfg: Settings, out_dir: Path) -> list[dict[str, str]]:
             except Exception as exc:
                 logger.error("Failed to resolve channel %s: %s", channel, exc)
                 if cfg.ON_VIDEO_FAILURE == "abort":
-                    raise
+                    raise CollectionError(
+                        f"Failed to resolve channel {channel}: {exc}"
+                    ) from exc
 
         # Write discovery manifest
         if all_videos:
@@ -113,6 +115,9 @@ def run_all(
     base_dir = Path(output_dir) if output_dir is not None else Path("runs")
 
     if resume_run_id:
+        # Validate run_id to prevent path traversal
+        if re.search(r"[/\\]|^\.\.", resume_run_id) or ".." in resume_run_id:
+            raise ValueError(f"Invalid resume run_id (path traversal attempt): {resume_run_id!r}")
         run_id = resume_run_id
         out_dir = base_dir / run_id
         logger.info("Resuming run %s", run_id)
@@ -128,10 +133,15 @@ def run_all(
 
     result = RunResult(run_id=run_id, output_dir=out_dir)
 
-    # manifest snapshot (always write/overwrite)
+    # manifest snapshot (always write/overwrite, secrets scrubbed)
     (out_dir / "logs").mkdir(exist_ok=True)
     manifest_path = out_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(cfg.model_dump(), indent=2), encoding="utf-8")
+    _SECRET_KEYS = {"YOUTUBE_API_KEY"}
+    manifest_data = {
+        k: ("***" if k in _SECRET_KEYS and v else v)
+        for k, v in cfg.model_dump().items()
+    }
+    manifest_path.write_text(json.dumps(manifest_data, indent=2), encoding="utf-8")
 
     # state
     ckpt = CheckpointStore(out_dir / "state" / "checkpoint.json")
@@ -186,7 +196,9 @@ def _process_single_video(
             })
             ckpt.mark(unit_key, stage_name, status="FAILED")
             if cfg.ON_VIDEO_FAILURE == "abort":
-                raise
+                raise CollectionError(
+                    f"Collection stage '{stage_name}' failed for {video_id}: {exc}"
+                ) from exc
             logger.warning("Skipping failed stage '%s' for %s (ON_VIDEO_FAILURE=skip)",
                            stage_name, video_id)
 

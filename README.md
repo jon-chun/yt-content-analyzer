@@ -73,7 +73,7 @@ The config file uses **ALL_CAPS** keys organized into sections:
 | **Inputs**           | `VIDEO_URL`, `SEARCH_TERMS`, or `YT_SUBSCRIPTIONS` (mutually exclusive)              |
 | **Subscriptions**    | `YT_SUBSCRIPTIONS` (list of channels), `MAX_SUB_VIDEOS` (per-channel default)        |
 | **Discovery filters**| `VIDEO_LANG`, `VIDEO_REGION`, `VIDEO_UPLOAD_DATE`, `MIN_VIEWS`                       |
-| **Collection**       | `ROBUST_OVER_SPEED`, `COLLECT_SORT_MODES`, `MAX_COMMENTS_PER_VIDEO`                  |
+| **Collection**       | `COLLECT_SORT_MODES`, `MAX_COMMENTS_PER_VIDEO`, `MAX_COMMENT_THREAD_DEPTH`           |
 | **Transcripts**      | `TRANSCRIPTS_ENABLE`, `TRANSCRIPTS_PREFER_MANUAL`, `TRANSCRIPT_CHUNK_*`              |
 | **Rate limiting**    | `API_RATE_LIMIT_RPS`, `API_MAX_CONCURRENT_CALLS`, `API_JITTER_MS_*`                  |
 | **Translation**      | `AUTO_TRANSLATE`, `TRANSLATE_PROVIDER`, `TRANSLATE_MODEL`                             |

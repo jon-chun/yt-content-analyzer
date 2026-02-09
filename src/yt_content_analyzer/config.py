@@ -29,7 +29,7 @@ def resolve_api_key(provider: str) -> str | None:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(extra="allow")
+    model_config = SettingsConfigDict(extra="ignore")
 
     # Inputs
     VIDEO_URL: Optional[str] = None
@@ -49,7 +49,6 @@ class Settings(BaseSettings):
     INCLUDE_SHORTS: bool = False
 
     # Collection
-    ROBUST_OVER_SPEED: bool = True
     MAX_COMMENT_THREAD_DEPTH: int = 5
     MAX_RETRY_SCRAPE: int = 3
     COLLECT_SORT_MODES: list[str] = ["top", "newest"]

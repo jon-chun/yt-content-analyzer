@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from ..config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 def chunk_transcripts(
@@ -30,6 +33,14 @@ def chunk_transcripts(
     chunk_start = min_start
     chunk_index = 0
     step = window_s - overlap_s
+    if step <= 0:
+        logger.warning(
+            "TRANSCRIPT_CHUNK_OVERLAP_SECONDS (%d) >= TRANSCRIPT_CHUNK_SECONDS (%d); "
+            "falling back to non-overlapping chunks",
+            overlap_s, window_s,
+        )
+        step = window_s
+        overlap_s = 0
 
     while chunk_start < max_end:
         chunk_end = chunk_start + window_s
