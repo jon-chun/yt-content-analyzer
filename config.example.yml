@@ -119,6 +119,20 @@ SA_GRANULARITY: ["polarity"]         # polarity|emotions|absa
 STRIP_PII: false
 
 # =============================================================================
+# SUMMARIZATION — LLM-based content summarization
+# =============================================================================
+# Requires LLM_PROVIDER to be set. Produces one summary per asset type per video.
+SUMMARY_ENABLE: true
+SUMMARY_MAX_ITEMS: 200              # max items to feed to the LLM (sampled if more)
+SUMMARY_MAX_RESPONSE_TOKENS: 1024   # max tokens for the LLM summary response
+
+# =============================================================================
+# URL EXTRACTION — regex-based URL extraction from comments/transcripts
+# =============================================================================
+# Pure-Python, no LLM needed. Extracts and aggregates URLs mentioned in text.
+URL_EXTRACTION_ENABLE: true
+
+# =============================================================================
 # REPORTING
 # =============================================================================
 REPORT_VARIANTS: ["all", "by-term", "by-vid"]

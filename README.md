@@ -15,7 +15,7 @@ Given a YouTube URL, a set of search terms, or a list of channel subscriptions, 
 | Search-term discovery | Scaffolded |
 | Comment collection (Playwright + yt-dlp fallback) | Functional |
 | Transcript collection (yt-dlp) | Functional |
-| Enrichment (topics, sentiment, triples) | Functional |
+| Enrichment (topics, sentiment, triples, summarization, URL extraction) | Functional |
 | Checkpointing and resume | Functional |
 | Markdown reports | Scaffolded |
 | Knowledge graph | Scaffolded |
@@ -79,6 +79,8 @@ The config file uses **ALL_CAPS** keys organized into sections:
 | **Translation**      | `AUTO_TRANSLATE`, `TRANSLATE_PROVIDER`, `TRANSLATE_MODEL`                             |
 | **Embeddings**       | `EMBEDDINGS_ENABLE`, `EMBEDDINGS_PROVIDER`, `EMBEDDINGS_MODEL`                       |
 | **NLP**              | `TM_CLUSTERING` (nlp or llm), `SA_GRANULARITY`, `STRIP_PII`                         |
+| **Summarization**    | `SUMMARY_ENABLE`, `SUMMARY_MAX_ITEMS`, `SUMMARY_MAX_RESPONSE_TOKENS`                 |
+| **URL extraction**   | `URL_EXTRACTION_ENABLE`                                                               |
 | **Error handling**   | `ON_VIDEO_FAILURE` (`skip` or `abort`), `MAX_RETRY_SCRAPE`                           |
 | **Reporting**        | `REPORT_VARIANTS`, `RUN_DESC_4WORDS`                                                 |
 
@@ -207,7 +209,7 @@ ytca run-all --resume 20260208T235833Z --config updated_config.yml
 
 By default, `ON_VIDEO_FAILURE` is set to `skip`: if a collection or enrichment stage fails for a video, the error is logged to `failures/`, the checkpoint is marked `FAILED`, and the pipeline continues to the next stage or video. Set `ON_VIDEO_FAILURE: "abort"` to halt on the first error instead.
 
-Collection stages (Playwright and yt-dlp calls) use a fallback chain and retry automatically with exponential backoff up to `MAX_RETRY_SCRAPE` times. Enrichment stages (embeddings, topics, sentiment, triples) each run independently -- a failure in one does not block the others.
+Collection stages (Playwright and yt-dlp calls) use a fallback chain and retry automatically with exponential backoff up to `MAX_RETRY_SCRAPE` times. Enrichment stages (embeddings, topics, sentiment, triples, URL extraction, summarization) each run independently -- a failure in one does not block the others.
 
 ## Pipeline overview
 
@@ -220,7 +222,7 @@ Input (URL / Subscriptions / Search terms)
               Comments: Playwright UI --> yt-dlp fallback
               Transcripts: yt-dlp subtitles (manual preferred, auto fallback)
             Parse (normalize, chunk transcripts by time windows)
-            Enrich (embeddings, topic modeling, sentiment, triples)
+            Enrich (embeddings, topic modeling, sentiment, triples, URL extraction, summarization)
       --> Report (Jinja2 Markdown templates)
 ```
 
@@ -248,6 +250,8 @@ runs/<RUN_ID>/
     topics.jsonl                 # Topic clusters per asset type (NLP or LLM)
     sentiment.jsonl              # Per-item polarity + score
     triples.jsonl                # Subject-predicate-object triples (LLM only)
+    urls.jsonl                   # Aggregated URLs with mention counts (regex, no LLM)
+    summary.jsonl                # Per-asset-type content summaries (LLM only)
   failures/                      # Per-stage failure records (JSON, created on error)
     <stage>_<video_id>.json      #   e.g. comments_abc123.json
   reports/
@@ -275,6 +279,8 @@ runs/<RUN_ID>/
 | `topics.jsonl` | JSONL | `VIDEO_ID`, `ASSET_TYPE`, `TOPIC_ID`, `LABEL`, `KEYWORDS`, `REPRESENTATIVE_TEXTS`, `SCORE` |
 | `sentiment.jsonl` | JSONL | `VIDEO_ID`, `ASSET_TYPE`, `ITEM_ID`, `POLARITY`, `SCORE`, `TEXT_EXCERPT` |
 | `triples.jsonl` | JSONL | `VIDEO_ID`, `ASSET_TYPE`, `SUBJECT`, `PREDICATE`, `OBJECT`, `CONFIDENCE`, `SOURCE_TEXT` |
+| `urls.jsonl` | JSONL | `VIDEO_ID`, `ASSET_TYPE`, `URL`, `DOMAIN`, `MENTION_COUNT`, `FIRST_SEEN_ITEM_ID` |
+| `summary.jsonl` | JSONL | `VIDEO_ID`, `ASSET_TYPE`, `SUMMARY`, `KEY_THEMES`, `TONE`, `ITEM_COUNT`, `ITEM_COUNT_ANALYZED` |
 | `failures/*.json` | JSON | `stage`, `video_id`, `error_type`, `error_message`, `traceback`, `timestamp` |
 | `checkpoint.json` | JSON | `UNITS: { <video_id>: { <stage>: "DONE"\|"FAILED" } }` |
 
@@ -292,6 +298,8 @@ chunks = pd.read_json("runs/<RUN_ID>/transcripts/transcript_chunks.jsonl", lines
 # Load enrichment results
 topics = pd.read_json("runs/<RUN_ID>/enrich/topics.jsonl", lines=True)
 sentiment = pd.read_json("runs/<RUN_ID>/enrich/sentiment.jsonl", lines=True)
+urls = pd.read_json("runs/<RUN_ID>/enrich/urls.jsonl", lines=True)
+summary = pd.read_json("runs/<RUN_ID>/enrich/summary.jsonl", lines=True)
 ```
 
 ## Python API
@@ -358,7 +366,7 @@ twine check dist/*
 | `test_priority1.py` | Error handling, logging, checkpoints, CLI resume |
 | `test_collection.py` | Collection pipeline integration |
 | `test_comments_playwright.py` | Playwright comment collector (heavily mocked) |
-| `test_enrichment.py` | Enrichment pipeline (topics, sentiment, triples) |
+| `test_enrichment.py` | Enrichment pipeline (topics, sentiment, triples, URL extraction, summarization) |
 | `test_subscriptions.py` | Subscription mode: config parsing, channel resolver, preflight, CLI |
 | `test_api_connectivity.py` | Live API probes (skipped if keys missing) |
 

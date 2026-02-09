@@ -47,7 +47,7 @@ def resolve_channel_videos(
     Returns a list of dicts: ``{"VIDEO_URL": ..., "VIDEO_ID": ..., "TITLE": ...}``.
     """
     try:
-        import yt_dlp  # noqa: F811
+        import yt_dlp  # type: ignore[import-untyped]
     except ImportError:
         raise RuntimeError(
             "yt-dlp is required for subscription mode. "

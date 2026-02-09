@@ -10,6 +10,8 @@ __all__ = [
     "extract_topics_nlp",
     "extract_triples",
     "compute_embeddings",
+    "extract_urls",
+    "summarize_content",
 ]
 
 _LAZY_IMPORTS = {
@@ -18,6 +20,8 @@ _LAZY_IMPORTS = {
     "extract_topics_nlp": ".topics_nlp",
     "extract_triples": ".triples",
     "compute_embeddings": ".embeddings_client",
+    "extract_urls": ".url_extraction",
+    "summarize_content": ".summarization",
 }
 
 

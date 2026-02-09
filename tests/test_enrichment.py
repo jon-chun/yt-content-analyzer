@@ -427,6 +427,178 @@ class TestEmbeddingsClient:
 # IO Tests
 # ===========================================================================
 
+# ===========================================================================
+# URL Extraction Tests
+# ===========================================================================
+
+class TestUrlExtraction:
+    def test_basic_extraction(self):
+        from yt_content_analyzer.enrich.url_extraction import extract_urls
+
+        cfg = _make_cfg()
+        items = [
+            {"TEXT": "Check out https://example.com/page and https://foo.org", "COMMENT_ID": "c1"},
+            {"TEXT": "Also https://example.com/page is great", "COMMENT_ID": "c2"},
+        ]
+        results = extract_urls(items, "vid1", "comments", cfg)
+
+        assert len(results) == 2
+        # Most mentioned first
+        assert results[0]["URL"] == "https://example.com/page"
+        assert results[0]["MENTION_COUNT"] == 2
+        assert results[0]["DOMAIN"] == "example.com"
+        assert results[0]["FIRST_SEEN_ITEM_ID"] == "c1"
+        assert results[1]["URL"] == "https://foo.org"
+        assert results[1]["MENTION_COUNT"] == 1
+
+    def test_schema_completeness(self):
+        from yt_content_analyzer.enrich.url_extraction import extract_urls
+
+        cfg = _make_cfg()
+        items = [{"TEXT": "Visit https://example.com", "COMMENT_ID": "c1"}]
+        results = extract_urls(items, "vid1", "comments", cfg)
+
+        assert len(results) == 1
+        required_keys = {
+            "VIDEO_ID", "ASSET_TYPE", "URL", "DOMAIN",
+            "MENTION_COUNT", "FIRST_SEEN_ITEM_ID",
+        }
+        assert required_keys == set(results[0].keys())
+        assert results[0]["VIDEO_ID"] == "vid1"
+        assert results[0]["ASSET_TYPE"] == "comments"
+
+    def test_empty_input(self):
+        from yt_content_analyzer.enrich.url_extraction import extract_urls
+
+        cfg = _make_cfg()
+        assert extract_urls([], "vid1", "comments", cfg) == []
+
+    def test_no_urls_in_text(self):
+        from yt_content_analyzer.enrich.url_extraction import extract_urls
+
+        cfg = _make_cfg()
+        items = [{"TEXT": "No links here, just plain text!", "COMMENT_ID": "c1"}]
+        assert extract_urls(items, "vid1", "comments", cfg) == []
+
+    def test_transcript_chunk_item_id(self):
+        from yt_content_analyzer.enrich.url_extraction import extract_urls
+
+        cfg = _make_cfg()
+        items = [{"TEXT": "See https://docs.python.org", "CHUNK_INDEX": 7}]
+        results = extract_urls(items, "vid1", "transcripts", cfg)
+
+        assert len(results) == 1
+        assert results[0]["FIRST_SEEN_ITEM_ID"] == "7"
+
+    def test_trailing_punctuation_cleanup(self):
+        from yt_content_analyzer.enrich.url_extraction import extract_urls
+
+        cfg = _make_cfg()
+        items = [
+            {"TEXT": "Visit https://example.com/path.", "COMMENT_ID": "c1"},
+            {"TEXT": "(see https://example.com/wiki_(test))", "COMMENT_ID": "c2"},
+        ]
+        results = extract_urls(items, "vid1", "comments", cfg)
+
+        urls = {r["URL"] for r in results}
+        assert "https://example.com/path" in urls
+        # Matched parens should be preserved, unmatched trailing ')' stripped
+        assert "https://example.com/wiki_(test)" in urls
+
+
+# ===========================================================================
+# Summarization Tests
+# ===========================================================================
+
+class TestSummarization:
+    def test_no_llm_provider(self):
+        from yt_content_analyzer.enrich.summarization import summarize_content
+
+        cfg = _make_cfg(LLM_PROVIDER=None)
+        items = _sample_items(10)
+        assert summarize_content(items, "vid1", "comments", cfg) == []
+
+    def test_with_mocked_llm(self):
+        from yt_content_analyzer.enrich.summarization import summarize_content
+
+        cfg = _make_cfg(LLM_PROVIDER="local", LLM_ENDPOINT="http://localhost:1234/v1")
+        items = _sample_items(5)
+
+        llm_response = json.dumps({
+            "summary": "People discuss AI and technology.",
+            "key_themes": ["AI", "technology", "future"],
+            "tone": "informative",
+        })
+        resp_data = {"choices": [{"message": {"content": llm_response}}]}
+        mock_resp = _mock_urlopen_response(resp_data)
+
+        with patch("yt_content_analyzer.enrich.llm_client.urllib.request.urlopen", return_value=mock_resp):
+            results = summarize_content(items, "vid1", "comments", cfg)
+
+        assert len(results) == 1
+        required_keys = {
+            "VIDEO_ID", "ASSET_TYPE", "SUMMARY", "KEY_THEMES",
+            "TONE", "ITEM_COUNT", "ITEM_COUNT_ANALYZED",
+        }
+        assert required_keys == set(results[0].keys())
+        assert results[0]["VIDEO_ID"] == "vid1"
+        assert results[0]["ASSET_TYPE"] == "comments"
+        assert results[0]["SUMMARY"] == "People discuss AI and technology."
+        assert results[0]["KEY_THEMES"] == ["AI", "technology", "future"]
+        assert results[0]["TONE"] == "informative"
+        assert results[0]["ITEM_COUNT"] == 5
+        assert results[0]["ITEM_COUNT_ANALYZED"] == 5
+
+    def test_empty_input(self):
+        from yt_content_analyzer.enrich.summarization import summarize_content
+
+        cfg = _make_cfg(LLM_PROVIDER="local", LLM_ENDPOINT="http://localhost:1234/v1")
+        assert summarize_content([], "vid1", "comments", cfg) == []
+
+    def test_sampling_respects_max_items(self):
+        from yt_content_analyzer.enrich.summarization import summarize_content
+
+        cfg = _make_cfg(
+            LLM_PROVIDER="local",
+            LLM_ENDPOINT="http://localhost:1234/v1",
+            SUMMARY_MAX_ITEMS=50,
+        )
+        items = _sample_items(300)
+
+        llm_response = json.dumps({
+            "summary": "Summary of sampled items.",
+            "key_themes": ["theme1"],
+            "tone": "neutral",
+        })
+        resp_data = {"choices": [{"message": {"content": llm_response}}]}
+        mock_resp = _mock_urlopen_response(resp_data)
+
+        with patch("yt_content_analyzer.enrich.llm_client.urllib.request.urlopen", return_value=mock_resp):
+            results = summarize_content(items, "vid1", "comments", cfg)
+
+        assert len(results) == 1
+        assert results[0]["ITEM_COUNT"] == 300
+        assert results[0]["ITEM_COUNT_ANALYZED"] <= 50
+
+    def test_llm_failure_returns_empty(self):
+        from yt_content_analyzer.enrich.summarization import summarize_content
+
+        cfg = _make_cfg(LLM_PROVIDER="local", LLM_ENDPOINT="http://localhost:1234/v1")
+        items = _sample_items(5)
+
+        with patch(
+            "yt_content_analyzer.enrich.llm_client.urllib.request.urlopen",
+            side_effect=RuntimeError("connection refused"),
+        ):
+            results = summarize_content(items, "vid1", "comments", cfg)
+
+        assert results == []
+
+
+# ===========================================================================
+# IO Tests
+# ===========================================================================
+
 class TestReadJsonl:
     def test_read_jsonl_missing_file(self, tmp_path):
         from yt_content_analyzer.utils.io import read_jsonl

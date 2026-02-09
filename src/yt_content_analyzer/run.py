@@ -352,6 +352,8 @@ def _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, result, failures_dir):
     from .enrich.topics_llm import extract_topics_llm
     from .enrich.sentiment import analyze_sentiment
     from .enrich.triples import extract_triples
+    from .enrich.url_extraction import extract_urls
+    from .enrich.summarization import summarize_content
 
     # Read collected data, filtering to current video_id
     all_comments = read_jsonl(out_dir / "comments" / "comments.jsonl")
@@ -465,3 +467,51 @@ def _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, result, failures_dir):
                 "stage": "enrich_triples", "video_id": video_id, "error": str(exc),
             })
             ckpt.mark(unit_key, "enrich_triples", status="FAILED")
+
+    # --- URL extraction ---
+    if cfg.URL_EXTRACTION_ENABLE and not ckpt.is_done(unit_key, "enrich_urls"):
+        try:
+            all_urls: list[dict] = []
+            for asset_type, items in [("comments", comments), ("transcripts", chunks)]:
+                if not items:
+                    continue
+                urls = extract_urls(items, video_id, asset_type, cfg)
+                all_urls.extend(urls)
+
+            if all_urls:
+                urls_path = enrich_dir / "urls.jsonl"
+                write_jsonl(urls_path, all_urls)
+                result.output_files.append(urls_path)
+                logger.info("Wrote %d URL records to enrich/urls.jsonl", len(all_urls))
+            ckpt.mark(unit_key, "enrich_urls")
+        except Exception as exc:
+            logger.exception("URL extraction failed for %s", video_id)
+            write_failure(failures_dir, "enrich_urls", video_id, exc)
+            result.failures.append({
+                "stage": "enrich_urls", "video_id": video_id, "error": str(exc),
+            })
+            ckpt.mark(unit_key, "enrich_urls", status="FAILED")
+
+    # --- Summarization ---
+    if cfg.SUMMARY_ENABLE and not ckpt.is_done(unit_key, "enrich_summary"):
+        try:
+            all_summaries: list[dict] = []
+            for asset_type, items in [("comments", comments), ("transcripts", chunks)]:
+                if not items:
+                    continue
+                summaries = summarize_content(items, video_id, asset_type, cfg)
+                all_summaries.extend(summaries)
+
+            if all_summaries:
+                summary_path = enrich_dir / "summary.jsonl"
+                write_jsonl(summary_path, all_summaries)
+                result.output_files.append(summary_path)
+                logger.info("Wrote %d summary records to enrich/summary.jsonl", len(all_summaries))
+            ckpt.mark(unit_key, "enrich_summary")
+        except Exception as exc:
+            logger.exception("Summarization failed for %s", video_id)
+            write_failure(failures_dir, "enrich_summary", video_id, exc)
+            result.failures.append({
+                "stage": "enrich_summary", "video_id": video_id, "error": str(exc),
+            })
+            ckpt.mark(unit_key, "enrich_summary", status="FAILED")

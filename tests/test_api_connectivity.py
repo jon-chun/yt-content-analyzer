@@ -16,10 +16,8 @@ import urllib.request
 
 import pytest
 
-from yt_content_analyzer.config import Settings, resolve_api_key
 from yt_content_analyzer.enrich.llm_client import (
     PROVIDER_BASE_URLS,
-    _resolve_base_url,
 )
 
 # Try loading .env if python-dotenv is available

@@ -31,13 +31,14 @@ def _resolve_base_url(provider: str, endpoint: str | None) -> str:
     return PROVIDER_BASE_URLS.get(provider, "http://localhost:11434/v1")
 
 
-def _post_json(url: str, payload: dict, headers: dict, timeout: int) -> dict:
+def _post_json(url: str, payload: dict, headers: dict, timeout: int) -> dict[str, Any]:
     """POST JSON and return parsed response dict."""
     body = json.dumps(payload).encode("utf-8")
     headers.setdefault("User-Agent", "yt-content-analyzer")
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        result: dict[str, Any] = json.loads(resp.read().decode("utf-8"))
+        return result
 
 
 def chat_completion(
@@ -75,7 +76,8 @@ def chat_completion(
     for attempt in range(max_retries + 1):
         try:
             data = _post_json(url, payload, headers, timeout)
-            return data["choices"][0]["message"]["content"]
+            content: str = data["choices"][0]["message"]["content"]
+            return content
         except urllib.error.HTTPError as e:
             if e.code in (429, 500, 502, 503, 504) and attempt < max_retries:
                 wait = min(backoff * (2 ** attempt), cfg.BACKOFF_MAX_SECONDS)

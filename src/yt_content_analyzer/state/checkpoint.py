@@ -22,7 +22,8 @@ class CheckpointStore:
 
     def load(self) -> dict[str, Any]:
         try:
-            return json.loads(self.path.read_text(encoding="utf-8"))
+            result: dict[str, Any] = json.loads(self.path.read_text(encoding="utf-8"))
+            return result
         except (json.JSONDecodeError, UnicodeDecodeError):
             backup = self.path.with_suffix(".json.corrupt")
             shutil.copy2(self.path, backup)
@@ -53,7 +54,8 @@ class CheckpointStore:
 
     def is_done(self, unit_key: str, stage: str) -> bool:
         data = self.load()
-        return data.get("UNITS", {}).get(unit_key, {}).get(stage) == "DONE"
+        status: str | None = data.get("UNITS", {}).get(unit_key, {}).get(stage)
+        return status == "DONE"
 
     def mark(self, unit_key: str, stage: str, status: str = "DONE") -> None:
         data = self.load()

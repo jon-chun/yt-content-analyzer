@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-import yaml
+import yaml  # type: ignore[import-untyped]
 from pathlib import Path
 from typing import Any, Optional
 
@@ -139,6 +139,14 @@ class Settings(BaseSettings):
     SA_GRANULARITY: list[str] = ["polarity"]
     STRIP_PII: bool = False
 
+    # Summarization
+    SUMMARY_ENABLE: bool = True
+    SUMMARY_MAX_ITEMS: int = 200
+    SUMMARY_MAX_RESPONSE_TOKENS: int = 1024
+
+    # URL extraction
+    URL_EXTRACTION_ENABLE: bool = True
+
     # Reporting
     REPORT_VARIANTS: list[str] = ["all", "by-term", "by-vid"]
     RUN_DESC_4WORDS: str = "run_desc"
@@ -194,8 +202,10 @@ def resolve_pricing(cfg: Settings, provider: str, model: str | None) -> dict[str
     """Look up per-token pricing for a provider/model pair. Returns {input, output}."""
     provider_prices = cfg.PRICING_USD_PER_1M_TOKENS.get(provider, {})
     if model and model in provider_prices:
-        return provider_prices[model]
-    return provider_prices.get("_default", {"input": 0.0, "output": 0.0})
+        result: dict[str, float] = provider_prices[model]
+        return result
+    fallback: dict[str, float] = provider_prices.get("_default", {"input": 0.0, "output": 0.0})
+    return fallback
 
 
 def load_settings(config_path: str | Path | None) -> Settings:
