@@ -1,20 +1,25 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import Settings
+from .exceptions import PreflightError
+from .models import RunResult
 from .preflight.checks import run_preflight
-from .utils.logger import get_logger, configure_file_logging
+from .utils.logger import setup_file_handler
 from .utils.io import read_jsonl, write_jsonl, write_failure
 from .state.checkpoint import CheckpointStore
 
+logger = logging.getLogger(__name__)
+
 
 def _new_run_id() -> str:
-    import datetime
-    return datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 def extract_video_id(url: str) -> str:
@@ -42,22 +47,50 @@ def extract_video_id(url: str) -> str:
     raise ValueError(f"Cannot extract video ID from URL: {url}")
 
 
-def run_all(cfg: Settings, *, resume_run_id: str | None = None) -> None:
-    logger = get_logger()
+def run_all(
+    cfg: Settings,
+    *,
+    output_dir: Path | str | None = None,
+    resume_run_id: str | None = None,
+) -> RunResult:
+    """Run the full collection + enrichment pipeline.
+
+    Parameters
+    ----------
+    cfg:
+        Resolved application settings.
+    output_dir:
+        Base directory for run outputs.  Defaults to ``Path("runs")``.
+    resume_run_id:
+        If given, resume an existing run instead of starting fresh.
+
+    Returns
+    -------
+    RunResult
+        Summary of what was collected and where outputs live.
+
+    Raises
+    ------
+    PreflightError
+        If preflight checks fail (new runs only).
+    """
+    base_dir = Path(output_dir) if output_dir is not None else Path("runs")
 
     if resume_run_id:
         run_id = resume_run_id
-        out_dir = Path("runs") / run_id
+        out_dir = base_dir / run_id
         logger.info("Resuming run %s", run_id)
     else:
         run_id = _new_run_id()
-        out_dir = Path("runs") / run_id
+        out_dir = base_dir / run_id
         out_dir.mkdir(parents=True, exist_ok=True)
 
         # preflight
-        ok = run_preflight(cfg, output_dir=out_dir)
-        if not ok:
-            raise SystemExit(2)
+        preflight_result = run_preflight(cfg, output_dir=out_dir)
+        if not preflight_result.ok:
+            raise PreflightError(preflight_result.results)
+
+    result = RunResult(run_id=run_id, output_dir=out_dir)
 
     # manifest snapshot (always write/overwrite)
     (out_dir / "logs").mkdir(exist_ok=True)
@@ -69,7 +102,7 @@ def run_all(cfg: Settings, *, resume_run_id: str | None = None) -> None:
     ckpt.init_if_missing()
 
     # file logging
-    configure_file_logging(out_dir / "logs")
+    setup_file_handler(logging.getLogger("yt_content_analyzer"), out_dir / "logs")
 
     logger.info("Run started", extra={"RUN_ID": run_id, "OUTPUT_DIR": str(out_dir)})
 
@@ -83,22 +116,26 @@ def run_all(cfg: Settings, *, resume_run_id: str | None = None) -> None:
         # Collection stages with per-video error policy
         for stage_name, stage_fn in [
             ("transcript", lambda: _collect_and_process_transcript(
-                cfg, video_id, out_dir, ckpt, unit_key, logger)),
+                cfg, video_id, out_dir, ckpt, unit_key, result)),
             ("comments", lambda: _collect_and_process_comments(
-                cfg, video_id, out_dir, ckpt, unit_key, logger)),
+                cfg, video_id, out_dir, ckpt, unit_key, result, failures_dir)),
         ]:
             try:
                 stage_fn()
             except Exception as exc:
                 logger.exception("Collection stage '%s' failed for %s", stage_name, video_id)
                 write_failure(failures_dir, stage_name, video_id, exc)
+                result.failures.append({
+                    "stage": stage_name, "video_id": video_id, "error": str(exc),
+                })
                 ckpt.mark(unit_key, stage_name, status="FAILED")
                 if cfg.ON_VIDEO_FAILURE == "abort":
                     raise
                 logger.warning("Skipping failed stage '%s' for %s (ON_VIDEO_FAILURE=skip)",
                                stage_name, video_id)
 
-        _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, logger, failures_dir)
+        _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, result, failures_dir)
+        result.videos_processed += 1
 
         logger.info("Pipeline complete for video %s", video_id)
     else:
@@ -106,8 +143,10 @@ def run_all(cfg: Settings, *, resume_run_id: str | None = None) -> None:
             "No VIDEO_URL set. Discovery-based pipeline not yet implemented."
         )
 
+    return result
 
-def _collect_and_process_transcript(cfg, video_id, out_dir, ckpt, unit_key, logger):
+
+def _collect_and_process_transcript(cfg, video_id, out_dir, ckpt, unit_key, result):
     from .collectors.transcript_ytdlp import collect_transcript_ytdlp
     from .parse.normalize_transcripts import normalize_transcripts
     from .parse.chunk_transcripts import chunk_transcripts
@@ -139,6 +178,7 @@ def _collect_and_process_transcript(cfg, video_id, out_dir, ckpt, unit_key, logg
     # Write segments
     seg_path = out_dir / "transcripts" / "transcript_segments.jsonl"
     write_jsonl(seg_path, segments)
+    result.output_files.append(seg_path)
     logger.info("Wrote %d transcript segments to %s", len(segments), seg_path)
 
     # Chunk
@@ -148,10 +188,12 @@ def _collect_and_process_transcript(cfg, video_id, out_dir, ckpt, unit_key, logg
     # Write chunks
     chunk_path = out_dir / "transcripts" / "transcript_chunks.jsonl"
     write_jsonl(chunk_path, chunks)
+    result.output_files.append(chunk_path)
+    result.transcript_chunks += len(chunks)
     logger.info("Wrote %d transcript chunks to %s", len(chunks), chunk_path)
 
 
-def _collect_and_process_comments(cfg, video_id, out_dir, ckpt, unit_key, logger):
+def _collect_and_process_comments(cfg, video_id, out_dir, ckpt, unit_key, result, failures_dir):
     from .parse.normalize_comments import normalize_comments
 
     if ckpt.is_done(unit_key, "comments_normalize"):
@@ -175,7 +217,9 @@ def _collect_and_process_comments(cfg, video_id, out_dir, ckpt, unit_key, logger
         try:
             from .collectors.comments_playwright_ui import collect_comments_playwright_ui
             t0 = time.time()
-            raw_comments = collect_comments_playwright_ui(cfg.VIDEO_URL, cfg, sort_mode)
+            raw_comments = collect_comments_playwright_ui(
+                cfg.VIDEO_URL, cfg, sort_mode, artifact_dir=failures_dir,
+            )
             logger.info(
                 "Playwright collected %d comments (%s sort) in %.1fs",
                 len(raw_comments), sort_mode, time.time() - t0,
@@ -224,6 +268,8 @@ def _collect_and_process_comments(cfg, video_id, out_dir, ckpt, unit_key, logger
     # Write merged file
     comments_path = out_dir / "comments" / "comments.jsonl"
     write_jsonl(comments_path, deduped)
+    result.output_files.append(comments_path)
+    result.comments_collected += len(deduped)
     logger.info(
         "Wrote %d comments (%d before dedup) to %s",
         len(deduped), len(all_normalized), comments_path,
@@ -231,7 +277,7 @@ def _collect_and_process_comments(cfg, video_id, out_dir, ckpt, unit_key, logger
     ckpt.mark(unit_key, "comments_normalize")
 
 
-def _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, logger, failures_dir):
+def _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, result, failures_dir):
     from .enrich.embeddings_client import compute_embeddings
     from .enrich.topics_nlp import extract_topics_nlp
     from .enrich.topics_llm import extract_topics_llm
@@ -265,6 +311,9 @@ def _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, logger, failures_dir):
         except Exception as exc:
             logger.exception("Embeddings failed for %s", video_id)
             write_failure(failures_dir, "enrich_embeddings", video_id, exc)
+            result.failures.append({
+                "stage": "enrich_embeddings", "video_id": video_id, "error": str(exc),
+            })
             ckpt.mark(unit_key, "enrich_embeddings", status="FAILED")
 
     # --- Topics ---
@@ -285,12 +334,17 @@ def _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, logger, failures_dir):
                 all_topics.extend(topics)
 
             if all_topics:
-                write_jsonl(enrich_dir / "topics.jsonl", all_topics)
+                topics_path = enrich_dir / "topics.jsonl"
+                write_jsonl(topics_path, all_topics)
+                result.output_files.append(topics_path)
                 logger.info("Wrote %d topic records to enrich/topics.jsonl", len(all_topics))
             ckpt.mark(unit_key, "enrich_topics")
         except Exception as exc:
             logger.exception("Topics enrichment failed for %s", video_id)
             write_failure(failures_dir, "enrich_topics", video_id, exc)
+            result.failures.append({
+                "stage": "enrich_topics", "video_id": video_id, "error": str(exc),
+            })
             ckpt.mark(unit_key, "enrich_topics", status="FAILED")
 
     # --- Sentiment ---
@@ -304,12 +358,17 @@ def _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, logger, failures_dir):
                 all_sentiment.extend(sentiment)
 
             if all_sentiment:
-                write_jsonl(enrich_dir / "sentiment.jsonl", all_sentiment)
+                sentiment_path = enrich_dir / "sentiment.jsonl"
+                write_jsonl(sentiment_path, all_sentiment)
+                result.output_files.append(sentiment_path)
                 logger.info("Wrote %d sentiment records to enrich/sentiment.jsonl", len(all_sentiment))
             ckpt.mark(unit_key, "enrich_sentiment")
         except Exception as exc:
             logger.exception("Sentiment enrichment failed for %s", video_id)
             write_failure(failures_dir, "enrich_sentiment", video_id, exc)
+            result.failures.append({
+                "stage": "enrich_sentiment", "video_id": video_id, "error": str(exc),
+            })
             ckpt.mark(unit_key, "enrich_sentiment", status="FAILED")
 
     # --- Triples ---
@@ -323,10 +382,15 @@ def _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, logger, failures_dir):
                 all_triples.extend(triples)
 
             if all_triples:
-                write_jsonl(enrich_dir / "triples.jsonl", all_triples)
+                triples_path = enrich_dir / "triples.jsonl"
+                write_jsonl(triples_path, all_triples)
+                result.output_files.append(triples_path)
                 logger.info("Wrote %d triple records to enrich/triples.jsonl", len(all_triples))
             ckpt.mark(unit_key, "enrich_triples")
         except Exception as exc:
             logger.exception("Triples enrichment failed for %s", video_id)
             write_failure(failures_dir, "enrich_triples", video_id, exc)
+            result.failures.append({
+                "stage": "enrich_triples", "video_id": video_id, "error": str(exc),
+            })
             ckpt.mark(unit_key, "enrich_triples", status="FAILED")

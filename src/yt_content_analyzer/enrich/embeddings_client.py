@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 from ..config import Settings
-from ..utils.logger import get_logger
 from .llm_client import get_embeddings
+
+logger = logging.getLogger(__name__)
 
 
 def compute_embeddings(texts: list[str], cfg: Settings) -> list[list[float]] | None:
@@ -11,7 +14,6 @@ def compute_embeddings(texts: list[str], cfg: Settings) -> list[list[float]] | N
     Returns list of embedding vectors, or None if embeddings are disabled
     or fail with fallback enabled.
     """
-    logger = get_logger()
 
     if not cfg.EMBEDDINGS_ENABLE:
         logger.info("Embeddings disabled (EMBEDDINGS_ENABLE=False)")

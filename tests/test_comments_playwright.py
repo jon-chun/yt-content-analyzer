@@ -498,7 +498,6 @@ class TestFallbackChain:
         )
         ckpt = MagicMock()
         ckpt.is_done.return_value = False
-        logger = MagicMock()
         out_dir = Path("/tmp/test_run")
 
         fake_ytdlp_comments = [
@@ -519,12 +518,16 @@ class TestFallbackChain:
         mock_ytdlp_mod.collect_comments_ytdlp.return_value = fake_ytdlp_comments
 
         import sys
+        from yt_content_analyzer.models import RunResult
+        result = RunResult(run_id="test", output_dir=out_dir)
+        failures_dir = out_dir / "failures"
+
         with patch.dict(sys.modules, {
             "yt_content_analyzer.collectors.comments_playwright_ui": mock_pw_mod,
             "yt_content_analyzer.collectors.comments_ytdlp": mock_ytdlp_mod,
         }):
             _collect_and_process_comments(
-                cfg, "test12345", out_dir, ckpt, "test12345", logger
+                cfg, "test12345", out_dir, ckpt, "test12345", result, failures_dir
             )
 
         # Should have written per-mode and merged files
@@ -545,7 +548,6 @@ class TestSortModeLoop:
         )
         ckpt = MagicMock(spec=CheckpointStore)
         ckpt.is_done.return_value = False
-        logger = MagicMock()
         out_dir = Path("/tmp/test_run")
 
         top_comments = [
@@ -563,12 +565,16 @@ class TestSortModeLoop:
 
         call_count = 0
 
-        def fake_playwright(url, cfg, sort_mode):
+        def fake_playwright(url, cfg, sort_mode, **kwargs):
             nonlocal call_count
             call_count += 1
             if sort_mode == "top":
                 return top_comments
             return newest_comments
+
+        from yt_content_analyzer.models import RunResult
+        result = RunResult(run_id="test", output_dir=out_dir)
+        failures_dir = out_dir / "failures"
 
         with patch.dict(
             "sys.modules",
@@ -579,7 +585,7 @@ class TestSortModeLoop:
             },
         ):
             _collect_and_process_comments(
-                cfg, "test12345", out_dir, ckpt, "test12345", logger
+                cfg, "test12345", out_dir, ckpt, "test12345", result, failures_dir
             )
 
         # Should have: per-mode file for "top", per-mode file for "newest", merged

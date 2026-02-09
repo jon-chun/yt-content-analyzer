@@ -1,14 +1,23 @@
 from __future__ import annotations
+
+import json
+import logging
 from pathlib import Path
 from typing import Optional
-import json
-from ..config import Settings
-from ..utils.logger import get_logger
 
-def run_preflight(cfg: Settings, output_dir: Optional[Path]) -> bool:
-    """Run multi-level preflight checks. Writes a markdown report under reports/ when output_dir is provided."""
-    logger = get_logger()
-    results = []
+from ..config import Settings
+from ..models import PreflightResult
+
+logger = logging.getLogger(__name__)
+
+
+def run_preflight(cfg: Settings, output_dir: Optional[Path]) -> PreflightResult:
+    """Run multi-level preflight checks.
+
+    Writes a markdown report under reports/ when *output_dir* is provided.
+    Returns a :class:`PreflightResult` whose ``.ok`` attribute indicates pass/fail.
+    """
+    results: list[dict] = []
 
     def record(level: int, name: str, ok: bool, detail: str = "") -> None:
         results.append({"LEVEL": level, "NAME": name, "OK": ok, "DETAIL": detail})
@@ -34,7 +43,9 @@ def run_preflight(cfg: Settings, output_dir: Optional[Path]) -> bool:
     record(5, "Rate limit sanity", True, "Scaffold: implement preset sanity checks.")
 
     ok = all(r["OK"] for r in results if r["LEVEL"] in (0,))
+
     # Persist report
+    report_path: Path | None = None
     if output_dir:
         reports_dir = output_dir / "reports"
         reports_dir.mkdir(parents=True, exist_ok=True)
@@ -42,11 +53,15 @@ def run_preflight(cfg: Settings, output_dir: Optional[Path]) -> bool:
         for r in results:
             status = "PASS" if r["OK"] else "FAIL"
             md.append(f"- L{r['LEVEL']} [{status}] **{r['NAME']}** — {r['DETAIL']}")
-        (reports_dir / f"preflight_{output_dir.name}.md").write_text("\n".join(md)+"\n", encoding="utf-8")
-        (reports_dir / f"preflight_{output_dir.name}.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+        report_path = reports_dir / f"preflight_{output_dir.name}.md"
+        report_path.write_text("\n".join(md) + "\n", encoding="utf-8")
+        (reports_dir / f"preflight_{output_dir.name}.json").write_text(
+            json.dumps(results, indent=2), encoding="utf-8"
+        )
 
     if not ok:
         logger.error("Preflight failed. See reports/preflight_*.md for details.")
     else:
         logger.info("Preflight passed (L0 strict).")
-    return ok
+
+    return PreflightResult(ok=ok, results=results, report_path=report_path)

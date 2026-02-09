@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 from ..config import Settings
-from ..utils.logger import get_logger
 from .llm_client import chat_completion, parse_json_response
+
+logger = logging.getLogger(__name__)
 
 
 def extract_triples(
@@ -19,8 +22,6 @@ def extract_triples(
     Returns list of dicts with keys:
     VIDEO_ID, ASSET_TYPE, SUBJECT, PREDICATE, OBJECT, CONFIDENCE, SOURCE_TEXT
     """
-    logger = get_logger()
-
     if not items:
         return []
 
@@ -78,8 +79,15 @@ def extract_triples(
             batch_start, batch_start + len(batch_texts), len(items),
         )
 
-        raw = chat_completion(cfg, messages, temperature=0.2, max_tokens=2048)
-        parsed = parse_json_response(raw)
+        try:
+            raw = chat_completion(cfg, messages, temperature=0.2, max_tokens=2048)
+            parsed = parse_json_response(raw)
+        except Exception:
+            logger.warning(
+                "Triples LLM batch %d failed for %s/%s — skipping batch",
+                batch_start, video_id, asset_type, exc_info=True,
+            )
+            continue
         triples = parsed.get("triples", []) if isinstance(parsed, dict) else []
 
         # Build text lookup for source_index

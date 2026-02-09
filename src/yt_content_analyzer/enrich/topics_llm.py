@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 import random
 
 from ..config import Settings
-from ..utils.logger import get_logger
 from .llm_client import chat_completion, parse_json_response
+
+logger = logging.getLogger(__name__)
 
 
 def extract_topics_llm(
@@ -21,8 +23,6 @@ def extract_topics_llm(
         List of topic dicts with keys:
         VIDEO_ID, ASSET_TYPE, TOPIC_ID, LABEL, KEYWORDS, REPRESENTATIVE_TEXTS, SCORE
     """
-    logger = get_logger()
-
     if not items:
         return []
 
@@ -75,8 +75,12 @@ def extract_topics_llm(
         "Extracting topics via LLM (%d texts, up to %d topics)", len(texts), n_topics
     )
 
-    raw = chat_completion(cfg, messages, temperature=0.3, max_tokens=2048)
-    parsed = parse_json_response(raw)
+    try:
+        raw = chat_completion(cfg, messages, temperature=0.3, max_tokens=2048)
+        parsed = parse_json_response(raw)
+    except Exception:
+        logger.warning("LLM topic extraction failed for %s/%s — returning []", video_id, asset_type, exc_info=True)
+        return []
 
     topics = parsed.get("topics", []) if isinstance(parsed, dict) else []
 

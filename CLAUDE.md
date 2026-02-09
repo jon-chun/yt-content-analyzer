@@ -25,6 +25,20 @@ mypy src/
 # CLI entry point
 ytca preflight --config config.yaml
 ytca run-all --config config.yaml --terms "AI agents 2026"
+
+# CLI with new switches
+ytca -v run-all --config config.yaml --video-url "https://www.youtube.com/watch?v=VIDEO_ID" \
+  --output-dir /tmp/test-run --sort-modes top --max-comments 50 --no-transcripts
+ytca run-all --config config.yaml --resume 20260101T120000Z
+ytca run-all --config config.yaml --video-url "..." --llm-provider openai --llm-model gpt-4o --on-failure abort
+
+# Library usage
+python -c "
+from yt_content_analyzer import run_all, Settings, load_settings, PreflightError
+cfg = load_settings('config.yaml')
+result = run_all(cfg, output_dir='/tmp/analysis')
+print(result.comments_collected)
+"
 ```
 
 ## Architecture
@@ -46,7 +60,7 @@ ytca run-all --config config.yaml --terms "AI agents 2026"
 - `config.py` — Pydantic Settings model with ALL_CAPS keys. Precedence: defaults → YAML config → env vars → CLI overrides. Resolved config persisted to `runs/<RUN_ID>/manifest.json`.
 - `state/checkpoint.py` — JSON-based checkpoint store for interrupt/resume. Keyed by `(VIDEO_ID, ASSET_TYPE, SORT_MODE, STAGE)`.
 - `utils/io.py` — append-mode JSONL and CSV writers.
-- `utils/logger.py` — singleton Rich-based logger.
+- `utils/logger.py` — `setup_cli_logging()` / `setup_file_handler()` helpers; modules use `logging.getLogger(__name__)`.
 
 **Run output structure:** `runs/<RUN_ID>/` with subdirs: `logs/`, `discovery/`, `comments/`, `transcripts/`, `enrich/`, `failures/`, `reports/`, `state/`.
 

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 from ..config import Settings
-from ..utils.logger import get_logger
 from .llm_client import chat_completion, parse_json_response
+
+logger = logging.getLogger(__name__)
 
 
 def analyze_sentiment_nlp(
@@ -61,8 +64,6 @@ def analyze_sentiment_llm(
     Returns list of dicts with keys:
     VIDEO_ID, ASSET_TYPE, ITEM_ID, POLARITY, SCORE, TEXT_EXCERPT
     """
-    logger = get_logger()
-
     if not items:
         return []
 
@@ -115,8 +116,15 @@ def analyze_sentiment_llm(
             batch_start, batch_start + len(batch_items), len(items),
         )
 
-        raw = chat_completion(cfg, messages, temperature=0.1, max_tokens=2048)
-        parsed = parse_json_response(raw)
+        try:
+            raw = chat_completion(cfg, messages, temperature=0.1, max_tokens=2048)
+            parsed = parse_json_response(raw)
+        except Exception:
+            logger.warning(
+                "Sentiment LLM batch %d failed for %s/%s — skipping batch",
+                batch_start, video_id, asset_type, exc_info=True,
+            )
+            continue
         llm_results = parsed.get("results", []) if isinstance(parsed, dict) else []
 
         # Build lookup for IDs
@@ -143,8 +151,6 @@ def analyze_sentiment(
     cfg: Settings,
 ) -> list[dict]:
     """Dispatch sentiment analysis: LLM if configured, NLP fallback otherwise."""
-    logger = get_logger()
-
     if not items:
         return []
 

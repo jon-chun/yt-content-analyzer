@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 import urllib.error
@@ -8,7 +9,8 @@ import urllib.request
 from typing import Any
 
 from ..config import Settings, resolve_api_key
-from ..utils.logger import get_logger
+
+logger = logging.getLogger(__name__)
 
 # Known base URLs per provider (OpenAI-compatible endpoints)
 PROVIDER_BASE_URLS: dict[str, str] = {
@@ -48,7 +50,6 @@ def chat_completion(
 
     Returns the assistant message content string.
     """
-    logger = get_logger()
     provider = cfg.LLM_PROVIDER or "local"
     base_url = _resolve_base_url(provider, cfg.LLM_ENDPOINT)
     url = f"{base_url}/chat/completions"

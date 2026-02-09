@@ -9,7 +9,7 @@ from typing import Any
 
 from ..config import Settings
 
-_logger = logging.getLogger("yt-content-analyzer")
+_logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -17,7 +17,11 @@ _logger = logging.getLogger("yt-content-analyzer")
 # ---------------------------------------------------------------------------
 
 def collect_comments_playwright_ui(
-    video_url: str, cfg: Settings, sort_mode: str = "top",
+    video_url: str,
+    cfg: Settings,
+    sort_mode: str = "top",
+    *,
+    artifact_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Collect comments via Playwright API interception.
 
@@ -92,7 +96,10 @@ def collect_comments_playwright_ui(
     except Exception as exc:
         _logger.warning("Playwright comment collection error: %s", exc)
         if cfg.CAPTURE_ARTIFACTS_ON_ERROR:
-            _save_artifact(page if "page" in dir() else None, video_url, sort_mode)
+            _save_artifact(
+                page if "page" in dir() else None, video_url, sort_mode,
+                artifact_dir=artifact_dir,
+            )
     finally:
         if browser is not None:
             try:
@@ -243,13 +250,15 @@ def _expand_replies(page, collected: list[dict], cfg: Settings) -> None:
             break
 
 
-def _save_artifact(page, video_url: str, sort_mode: str) -> None:
+def _save_artifact(
+    page, video_url: str, sort_mode: str, *, artifact_dir: Path | None = None,
+) -> None:
     """Save a screenshot on error for debugging."""
-    if page is None:
+    if page is None or artifact_dir is None:
         return
     try:
         video_id = _extract_video_id_from_url(video_url)
-        path = Path("failures") / f"playwright_comments_{video_id}_{sort_mode}.png"
+        path = artifact_dir / f"playwright_comments_{video_id}_{sort_mode}.png"
         path.parent.mkdir(parents=True, exist_ok=True)
         page.screenshot(path=str(path))
         _logger.debug("Saved artifact screenshot to %s", path)

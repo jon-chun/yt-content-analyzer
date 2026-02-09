@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 import urllib.request
 from typing import Any
 
 from ..config import Settings
-from ..utils.logger import get_logger
+
+logger = logging.getLogger(__name__)
 
 
 def collect_transcript_ytdlp(video_url: str, cfg: Settings) -> dict[str, Any]:
@@ -13,10 +16,9 @@ def collect_transcript_ytdlp(video_url: str, cfg: Settings) -> dict[str, Any]:
 
     Returns dict with keys: video_id, source, lang, entries
     where entries is a list of {text, start, duration}.
+    Retries on failure with exponential backoff.
     """
     import yt_dlp
-
-    logger = get_logger()
 
     ydl_opts: dict[str, Any] = {
         "skip_download": True,
@@ -27,8 +29,27 @@ def collect_transcript_ytdlp(video_url: str, cfg: Settings) -> dict[str, Any]:
         "no_warnings": True,
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(video_url, download=False)
+    max_retries = cfg.MAX_RETRY_SCRAPE
+    backoff = cfg.BACKOFF_BASE_SECONDS
+
+    for attempt in range(max_retries + 1):
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=False)
+            break
+        except Exception as exc:
+            if attempt < max_retries:
+                wait = min(backoff * (2 ** attempt), cfg.BACKOFF_MAX_SECONDS)
+                logger.warning(
+                    "yt-dlp transcript attempt %d/%d failed (%s), retrying in %.1fs",
+                    attempt + 1, max_retries + 1, exc, wait,
+                )
+                time.sleep(wait)
+                continue
+            logger.error(
+                "yt-dlp transcript exhausted %d retries for %s", max_retries + 1, video_url
+            )
+            raise
 
     video_id = info.get("id", "")
     lang_prefs = cfg.TRANSCRIPTS_LANG_PREFERENCE
@@ -65,8 +86,22 @@ def collect_transcript_ytdlp(video_url: str, cfg: Settings) -> dict[str, Any]:
         "Downloading %s subtitles (%s) for %s", source, chosen_lang, video_id
     )
 
-    # Download and parse json3 subtitle data
-    entries = _download_and_parse_json3(chosen_url)
+    # Download and parse json3 subtitle data (with retry)
+    for attempt in range(max_retries + 1):
+        try:
+            entries = _download_and_parse_json3(chosen_url)
+            break
+        except Exception as exc:
+            if attempt < max_retries:
+                wait = min(backoff * (2 ** attempt), cfg.BACKOFF_MAX_SECONDS)
+                logger.warning(
+                    "json3 download attempt %d/%d failed (%s), retrying in %.1fs",
+                    attempt + 1, max_retries + 1, exc, wait,
+                )
+                time.sleep(wait)
+                continue
+            logger.error("json3 download exhausted %d retries for %s", max_retries + 1, video_id)
+            raise
 
     return {
         "video_id": video_id,

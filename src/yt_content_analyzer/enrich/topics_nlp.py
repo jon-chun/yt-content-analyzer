@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
+
 from ..config import Settings
-from ..utils.logger import get_logger
+
+logger = logging.getLogger(__name__)
 
 
 def extract_topics_nlp(
@@ -24,8 +27,6 @@ def extract_topics_nlp(
         List of topic dicts with keys:
         VIDEO_ID, ASSET_TYPE, TOPIC_ID, LABEL, KEYWORDS, REPRESENTATIVE_TEXTS, SCORE
     """
-    logger = get_logger()
-
     if not items:
         return []
 

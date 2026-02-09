@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import yaml
 from pathlib import Path
@@ -53,6 +54,14 @@ class Settings(BaseSettings):
     MAX_COMMENTS_PER_VIDEO: int = 200_000
     CAPTURE_ARTIFACTS_ON_ERROR: bool = True
     CAPTURE_ARTIFACTS_ALWAYS: bool = False
+    ON_VIDEO_FAILURE: str = "skip"
+
+    @field_validator("ON_VIDEO_FAILURE")
+    @classmethod
+    def _validate_on_video_failure(cls, v: str) -> str:
+        if v not in ("skip", "abort"):
+            raise ValueError(f"ON_VIDEO_FAILURE must be 'skip' or 'abort', got {v!r}")
+        return v
 
     # Transcripts
     TRANSCRIPTS_ENABLE: bool = True
