@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-yt-content-analyzer is a scrape-first YouTube comments + transcripts collection and analysis tool for moderate academic research scale. It resolves search terms to top-N videos, collects comments (Top/Newest sort modes) and transcripts (manual preferred, auto fallback), enriches via translation/embeddings/sentiment/triples, and produces JSONL/CSV datasets plus Markdown reports. The pipeline is early-stage — most modules are scaffolded but not yet implemented.
+yt-content-analyzer is a scrape-first YouTube comments + transcripts collection and analysis tool for moderate academic research scale (10–500 videos). Given a URL or search terms, it collects comments (Top/Newest sort), transcripts (manual preferred, auto fallback), enriches via NLP/LLM pipelines, and produces JSONL datasets plus Markdown reports. The single-video pipeline is functional end-to-end; multi-video discovery is scaffolded but not yet implemented.
 
 ## Commands
 
@@ -13,67 +13,87 @@ yt-content-analyzer is a scrape-first YouTube comments + transcripts collection 
 pip install -e ".[dev,scrape,reports,nlp]"
 playwright install
 
-# Run tests
+# Run full test suite
 pytest
 
-# Lint
+# Run a single test file
+pytest tests/test_priority1.py
+
+# Run a single test by name
+pytest tests/test_priority1.py -k "test_checkpoint_round_trip"
+
+# Lint (check only)
 ruff check src/ tests/
+
+# Lint (auto-fix)
+ruff check --fix src/ tests/
 
 # Type check
 mypy src/
 
-# CLI entry point
+# CLI
 ytca preflight --config config.yaml
-ytca run-all --config config.yaml --terms "AI agents 2026"
-
-# CLI with new switches
-ytca -v run-all --config config.yaml --video-url "https://www.youtube.com/watch?v=VIDEO_ID" \
-  --output-dir /tmp/test-run --sort-modes top --max-comments 50 --no-transcripts
-ytca run-all --config config.yaml --resume 20260101T120000Z
-ytca run-all --config config.yaml --video-url "..." --llm-provider openai --llm-model gpt-4o --on-failure abort
-
-# Library usage
-python -c "
-from yt_content_analyzer import run_all, Settings, load_settings, PreflightError
-cfg = load_settings('config.yaml')
-result = run_all(cfg, output_dir='/tmp/analysis')
-print(result.comments_collected)
-"
+ytca run-all --config config.yaml --video-url "https://www.youtube.com/watch?v=VIDEO_ID"
+ytca run-all --resume 20260101T120000Z
 ```
 
 ## Architecture
 
-**Package layout:** `src/yt_content_analyzer/` (hatchling build, wheel packages from `src/`).
+**Package layout:** `src/yt_content_analyzer/` — hatchling build, entry point `ytca = yt_content_analyzer.cli:main`.
 
-**Pipeline stages** (checkpointed per `(VIDEO_ID, ASSET_TYPE, SORT_MODE, STAGE)`):
+**Pipeline stages** (checkpointed per `(VIDEO_ID, STAGE)`):
 1. **Preflight** (`preflight/`) — multi-level config validation, endpoint probes, fail-fast
-2. **Discovery** (`discovery/`) — search terms → video list via scraping (API fallback rare)
+2. **Discovery** (`discovery/`) — search terms → video list via scraping *(scaffolded)*
 3. **Collection** (`collectors/`) — comments + transcripts with provider fallback chains:
    - Comments: Playwright UI → yt-dlp → YouTube Data API v3
    - Transcripts: transcript extractor lib → yt-dlp subtitles → Playwright UI
 4. **Parse** (`parse/`) — normalize, chunk transcripts (time windows with overlap), PII strip, translate
-5. **Enrich** (`enrich/`) — embeddings (local/remote with sampling fallback), topic modeling (NLP/LLM), sentiment, relation triples
-6. **Reporting** (`reporting/`) — Jinja2 Markdown reports in variants: all, by-term, by-vid
-7. **Knowledge Graph** (`knowledge_graph/`) — optional/future RDFLib+NetworkX+PyVis
+5. **Enrich** (`enrich/`) — embeddings, topic modeling (NLP/LLM), sentiment, relation triples
+6. **Reporting** (`reporting/`) — Jinja2 Markdown reports *(scaffolded)*
+7. **Knowledge Graph** (`knowledge_graph/`) — RDFLib+NetworkX+PyVis *(scaffolded)*
+
+**Orchestrator:** `run.py` — `run_all()` drives the full pipeline for a single video, creating a run directory under `runs/<RUN_ID>/` with subdirs: `logs/`, `comments/`, `transcripts/`, `enrich/`, `failures/`, `reports/`, `state/`.
 
 **Key modules:**
-- `config.py` — Pydantic Settings model with ALL_CAPS keys. Precedence: defaults → YAML config → env vars → CLI overrides. Resolved config persisted to `runs/<RUN_ID>/manifest.json`.
-- `state/checkpoint.py` — JSON-based checkpoint store for interrupt/resume. Keyed by `(VIDEO_ID, ASSET_TYPE, SORT_MODE, STAGE)`.
-- `utils/io.py` — append-mode JSONL and CSV writers.
-- `utils/logger.py` — `setup_cli_logging()` / `setup_file_handler()` helpers; modules use `logging.getLogger(__name__)`.
+- `config.py` — Pydantic Settings model with ALL_CAPS keys. Precedence: defaults → YAML → env vars → CLI overrides. Resolved config persisted to `manifest.json`.
+- `state/checkpoint.py` — JSON-based checkpoint store for interrupt/resume. Stages marked `"DONE"` or `"FAILED"`.
+- `utils/io.py` — append-mode JSONL and CSV writers, failure record writer.
+- `utils/logger.py` — `setup_cli_logging()` for Rich console output, `setup_file_handler()` for JSON-lines file logging. Modules use `logging.getLogger(__name__)`.
 
-**Run output structure:** `runs/<RUN_ID>/` with subdirs: `logs/`, `discovery/`, `comments/`, `transcripts/`, `enrich/`, `failures/`, `reports/`, `state/`.
+**Public API** (`__init__.py` exports): `run_all`, `run_preflight`, `extract_video_id`, `Settings`, `load_settings`, `resolve_api_key`, `resolve_pricing`, `RunResult`, `PreflightResult`, `CheckpointStore`, and the exception hierarchy.
+
+**Exception hierarchy:**
+```
+YTCAError (base)
+├── ConfigError        — invalid/inconsistent config
+├── PreflightError     — preflight failed (carries .results list)
+├── CollectionError    — comment/transcript collection failure
+└── EnrichmentError    — enrichment pipeline failure
+```
 
 ## Configuration
 
 - Config keys are ALL_CAPS everywhere (YAML, Settings model, env vars).
-- Env vars use canonical provider names (`OPENAI_API_KEY`, `YOUTUBE_API_KEY`, etc.) resolved at runtime via `resolve_api_key(provider)` in `config.py`.
+- Env vars use canonical provider names (`OPENAI_API_KEY`, `YOUTUBE_API_KEY`, etc.) resolved at runtime via `resolve_api_key(provider)`.
 - Hard caps enforced: `MAX_VIDEOS_PER_TERM <= 10`, `MAX_TOTAL_VIDEOS <= 500`.
 - `VIDEO_URL` and `SEARCH_TERMS` are mutually exclusive inputs.
+- `ON_VIDEO_FAILURE`: `"skip"` (default, log + continue) or `"abort"` (halt immediately).
+- See `config.example.yaml` for all available keys with defaults.
+
+## Tests
+
+Tests live in `tests/` using pytest. No conftest or fixtures beyond standard library mocking.
+
+- `test_smoke.py` — basic import and smoke tests
+- `test_priority1.py` — core functionality: error handling, logging, checkpoints, CLI resume
+- `test_collection.py` — collection pipeline integration
+- `test_comments_playwright.py` — Playwright comment collector (heavily mocked)
+- `test_enrichment.py` — enrichment pipeline
+- `test_api_connectivity.py` — live API probes (skipped if keys missing)
 
 ## Style
 
 - Ruff with `line-length = 100`.
-- Python 3.10+ (uses `list[str]` style annotations with `from __future__ import annotations`).
-- mypy configured with `python_version = "3.10"`, `disallow_untyped_defs = false`.
-- Optional dependency groups: `scrape` (playwright, yt-dlp), `nlp` (numpy, pandas), `reports` (Jinja2), `kg` (rdflib, networkx, pyvis).
+- Python 3.10+ — uses `from __future__ import annotations` and `list[str]` style annotations.
+- mypy: `python_version = "3.10"`, `disallow_untyped_defs = false`.
+- Optional dependency groups: `scrape` (playwright, yt-dlp), `nlp` (numpy, pandas, scikit-learn, textblob), `reports` (Jinja2), `kg` (rdflib, networkx, pyvis).
