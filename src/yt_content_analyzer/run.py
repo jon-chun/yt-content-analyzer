@@ -7,8 +7,8 @@ from pathlib import Path
 
 from .config import Settings
 from .preflight.checks import run_preflight
-from .utils.logger import get_logger
-from .utils.io import read_jsonl, write_jsonl
+from .utils.logger import get_logger, configure_file_logging
+from .utils.io import read_jsonl, write_jsonl, write_failure
 from .state.checkpoint import CheckpointStore
 
 
@@ -42,18 +42,24 @@ def extract_video_id(url: str) -> str:
     raise ValueError(f"Cannot extract video ID from URL: {url}")
 
 
-def run_all(cfg: Settings) -> None:
+def run_all(cfg: Settings, *, resume_run_id: str | None = None) -> None:
     logger = get_logger()
-    run_id = _new_run_id()
-    out_dir = Path("runs") / run_id
-    out_dir.mkdir(parents=True, exist_ok=True)
 
-    # preflight
-    ok = run_preflight(cfg, output_dir=out_dir)
-    if not ok:
-        raise SystemExit(2)
+    if resume_run_id:
+        run_id = resume_run_id
+        out_dir = Path("runs") / run_id
+        logger.info("Resuming run %s", run_id)
+    else:
+        run_id = _new_run_id()
+        out_dir = Path("runs") / run_id
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-    # manifest snapshot
+        # preflight
+        ok = run_preflight(cfg, output_dir=out_dir)
+        if not ok:
+            raise SystemExit(2)
+
+    # manifest snapshot (always write/overwrite)
     (out_dir / "logs").mkdir(exist_ok=True)
     manifest_path = out_dir / "manifest.json"
     manifest_path.write_text(json.dumps(cfg.model_dump(), indent=2), encoding="utf-8")
@@ -62,16 +68,37 @@ def run_all(cfg: Settings) -> None:
     ckpt = CheckpointStore(out_dir / "state" / "checkpoint.json")
     ckpt.init_if_missing()
 
+    # file logging
+    configure_file_logging(out_dir / "logs")
+
     logger.info("Run started", extra={"RUN_ID": run_id, "OUTPUT_DIR": str(out_dir)})
+
+    failures_dir = out_dir / "failures"
 
     # --- Single-video collection pipeline ---
     if cfg.VIDEO_URL:
         video_id = extract_video_id(cfg.VIDEO_URL)
         unit_key = video_id
 
-        _collect_and_process_transcript(cfg, video_id, out_dir, ckpt, unit_key, logger)
-        _collect_and_process_comments(cfg, video_id, out_dir, ckpt, unit_key, logger)
-        _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, logger)
+        # Collection stages with per-video error policy
+        for stage_name, stage_fn in [
+            ("transcript", lambda: _collect_and_process_transcript(
+                cfg, video_id, out_dir, ckpt, unit_key, logger)),
+            ("comments", lambda: _collect_and_process_comments(
+                cfg, video_id, out_dir, ckpt, unit_key, logger)),
+        ]:
+            try:
+                stage_fn()
+            except Exception as exc:
+                logger.exception("Collection stage '%s' failed for %s", stage_name, video_id)
+                write_failure(failures_dir, stage_name, video_id, exc)
+                ckpt.mark(unit_key, stage_name, status="FAILED")
+                if cfg.ON_VIDEO_FAILURE == "abort":
+                    raise
+                logger.warning("Skipping failed stage '%s' for %s (ON_VIDEO_FAILURE=skip)",
+                               stage_name, video_id)
+
+        _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, logger, failures_dir)
 
         logger.info("Pipeline complete for video %s", video_id)
     else:
@@ -87,6 +114,10 @@ def _collect_and_process_transcript(cfg, video_id, out_dir, ckpt, unit_key, logg
 
     if not cfg.TRANSCRIPTS_ENABLE:
         logger.info("Transcripts disabled, skipping")
+        return
+
+    if ckpt.is_done(unit_key, "transcript_chunk"):
+        logger.info("Transcript already processed for %s, skipping", video_id)
         return
 
     # Collect
@@ -121,32 +152,86 @@ def _collect_and_process_transcript(cfg, video_id, out_dir, ckpt, unit_key, logg
 
 
 def _collect_and_process_comments(cfg, video_id, out_dir, ckpt, unit_key, logger):
-    from .collectors.comments_ytdlp import collect_comments_ytdlp
     from .parse.normalize_comments import normalize_comments
 
-    # Collect
-    logger.info("Collecting comments for %s", video_id)
-    t0 = time.time()
-    raw_comments = collect_comments_ytdlp(cfg.VIDEO_URL, cfg)
-    logger.info("Comments collected in %.1fs (%d comments)",
-                time.time() - t0, len(raw_comments))
-    ckpt.mark(unit_key, "comments_collect")
-
-    if not raw_comments:
-        logger.warning("No comments for %s", video_id)
+    if ckpt.is_done(unit_key, "comments_normalize"):
+        logger.info("Comments already processed for %s, skipping", video_id)
         return
 
-    # Normalize
-    normalized = normalize_comments(raw_comments, video_id, cfg)
+    all_normalized = []
+
+    for sort_mode in cfg.COLLECT_SORT_MODES:
+        sm_ckpt_key = f"comments_collect_{sort_mode}"
+
+        if ckpt.is_done(unit_key, sm_ckpt_key):
+            # Already collected this sort mode — read from per-mode file
+            per_mode_path = out_dir / "comments" / f"comments_{sort_mode}.jsonl"
+            all_normalized.extend(read_jsonl(per_mode_path))
+            continue
+
+        raw_comments = []
+
+        # --- Fallback chain: Playwright → yt-dlp ---
+        try:
+            from .collectors.comments_playwright_ui import collect_comments_playwright_ui
+            t0 = time.time()
+            raw_comments = collect_comments_playwright_ui(cfg.VIDEO_URL, cfg, sort_mode)
+            logger.info(
+                "Playwright collected %d comments (%s sort) in %.1fs",
+                len(raw_comments), sort_mode, time.time() - t0,
+            )
+        except Exception as exc:
+            logger.warning("Playwright failed for %s (%s): %s", video_id, sort_mode, exc)
+
+        if not raw_comments:
+            try:
+                from .collectors.comments_ytdlp import collect_comments_ytdlp
+                t0 = time.time()
+                raw_comments = collect_comments_ytdlp(cfg.VIDEO_URL, cfg)
+                logger.info(
+                    "yt-dlp fallback collected %d comments in %.1fs",
+                    len(raw_comments), time.time() - t0,
+                )
+            except Exception as exc:
+                logger.warning("yt-dlp fallback also failed for %s: %s", video_id, exc)
+
+        if not raw_comments:
+            logger.warning("No comments collected for %s (%s sort)", video_id, sort_mode)
+            ckpt.mark(unit_key, sm_ckpt_key)
+            continue
+
+        # Normalize with sort_mode tag
+        normalized = normalize_comments(raw_comments, video_id, cfg, sort_mode=sort_mode)
+
+        # Write per-sort-mode file
+        per_mode_path = out_dir / "comments" / f"comments_{sort_mode}.jsonl"
+        write_jsonl(per_mode_path, normalized)
+        ckpt.mark(unit_key, sm_ckpt_key)
+
+        all_normalized.extend(normalized)
+
+    # Deduplicate by COMMENT_ID (keep first occurrence)
+    seen_ids: set[str] = set()
+    deduped: list[dict] = []
+    for c in all_normalized:
+        cid = c["COMMENT_ID"]
+        if cid and cid not in seen_ids:
+            seen_ids.add(cid)
+            deduped.append(c)
+        elif not cid:
+            deduped.append(c)  # keep comments with no ID
+
+    # Write merged file
+    comments_path = out_dir / "comments" / "comments.jsonl"
+    write_jsonl(comments_path, deduped)
+    logger.info(
+        "Wrote %d comments (%d before dedup) to %s",
+        len(deduped), len(all_normalized), comments_path,
+    )
     ckpt.mark(unit_key, "comments_normalize")
 
-    # Write
-    comments_path = out_dir / "comments" / "comments.jsonl"
-    write_jsonl(comments_path, normalized)
-    logger.info("Wrote %d comments to %s", len(normalized), comments_path)
 
-
-def _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, logger):
+def _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, logger, failures_dir):
     from .enrich.embeddings_client import compute_embeddings
     from .enrich.topics_nlp import extract_topics_nlp
     from .enrich.topics_llm import extract_topics_llm
@@ -173,55 +258,75 @@ def _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, logger):
     # --- Embeddings (optional, used by NLP topics) ---
     embeddings = None
     if cfg.EMBEDDINGS_ENABLE and not ckpt.is_done(unit_key, "enrich_embeddings"):
-        texts = [item.get("TEXT", "") for item in all_items]
-        embeddings = compute_embeddings(texts, cfg)
-        ckpt.mark(unit_key, "enrich_embeddings")
+        try:
+            texts = [item.get("TEXT", "") for item in all_items]
+            embeddings = compute_embeddings(texts, cfg)
+            ckpt.mark(unit_key, "enrich_embeddings")
+        except Exception as exc:
+            logger.exception("Embeddings failed for %s", video_id)
+            write_failure(failures_dir, "enrich_embeddings", video_id, exc)
+            ckpt.mark(unit_key, "enrich_embeddings", status="FAILED")
 
     # --- Topics ---
     if not ckpt.is_done(unit_key, "enrich_topics"):
-        all_topics: list[dict] = []
-        for asset_type, items in [("comments", comments), ("transcripts", chunks)]:
-            if not items:
-                continue
-            if cfg.TM_CLUSTERING == "llm":
-                topics = extract_topics_llm(items, video_id, asset_type, cfg)
-            else:
-                asset_embeddings = None
-                if embeddings is not None:
-                    offset = 0 if asset_type == "comments" else len(comments)
-                    asset_embeddings = embeddings[offset : offset + len(items)]
-                topics = extract_topics_nlp(items, video_id, asset_type, cfg, asset_embeddings)
-            all_topics.extend(topics)
+        try:
+            all_topics: list[dict] = []
+            for asset_type, items in [("comments", comments), ("transcripts", chunks)]:
+                if not items:
+                    continue
+                if cfg.TM_CLUSTERING == "llm":
+                    topics = extract_topics_llm(items, video_id, asset_type, cfg)
+                else:
+                    asset_embeddings = None
+                    if embeddings is not None:
+                        offset = 0 if asset_type == "comments" else len(comments)
+                        asset_embeddings = embeddings[offset : offset + len(items)]
+                    topics = extract_topics_nlp(items, video_id, asset_type, cfg, asset_embeddings)
+                all_topics.extend(topics)
 
-        if all_topics:
-            write_jsonl(enrich_dir / "topics.jsonl", all_topics)
-            logger.info("Wrote %d topic records to enrich/topics.jsonl", len(all_topics))
-        ckpt.mark(unit_key, "enrich_topics")
+            if all_topics:
+                write_jsonl(enrich_dir / "topics.jsonl", all_topics)
+                logger.info("Wrote %d topic records to enrich/topics.jsonl", len(all_topics))
+            ckpt.mark(unit_key, "enrich_topics")
+        except Exception as exc:
+            logger.exception("Topics enrichment failed for %s", video_id)
+            write_failure(failures_dir, "enrich_topics", video_id, exc)
+            ckpt.mark(unit_key, "enrich_topics", status="FAILED")
 
     # --- Sentiment ---
     if not ckpt.is_done(unit_key, "enrich_sentiment"):
-        all_sentiment: list[dict] = []
-        for asset_type, items in [("comments", comments), ("transcripts", chunks)]:
-            if not items:
-                continue
-            sentiment = analyze_sentiment(items, video_id, asset_type, cfg)
-            all_sentiment.extend(sentiment)
+        try:
+            all_sentiment: list[dict] = []
+            for asset_type, items in [("comments", comments), ("transcripts", chunks)]:
+                if not items:
+                    continue
+                sentiment = analyze_sentiment(items, video_id, asset_type, cfg)
+                all_sentiment.extend(sentiment)
 
-        if all_sentiment:
-            write_jsonl(enrich_dir / "sentiment.jsonl", all_sentiment)
-            logger.info("Wrote %d sentiment records to enrich/sentiment.jsonl", len(all_sentiment))
-        ckpt.mark(unit_key, "enrich_sentiment")
+            if all_sentiment:
+                write_jsonl(enrich_dir / "sentiment.jsonl", all_sentiment)
+                logger.info("Wrote %d sentiment records to enrich/sentiment.jsonl", len(all_sentiment))
+            ckpt.mark(unit_key, "enrich_sentiment")
+        except Exception as exc:
+            logger.exception("Sentiment enrichment failed for %s", video_id)
+            write_failure(failures_dir, "enrich_sentiment", video_id, exc)
+            ckpt.mark(unit_key, "enrich_sentiment", status="FAILED")
 
     # --- Triples ---
     if not ckpt.is_done(unit_key, "enrich_triples"):
-        all_triples: list[dict] = []
-        for asset_type, items in [("comments", comments), ("transcripts", chunks)]:
-            if not items:
-                continue
-            triples = extract_triples(items, video_id, asset_type, cfg)
-            all_triples.extend(triples)
+        try:
+            all_triples: list[dict] = []
+            for asset_type, items in [("comments", comments), ("transcripts", chunks)]:
+                if not items:
+                    continue
+                triples = extract_triples(items, video_id, asset_type, cfg)
+                all_triples.extend(triples)
 
-        if all_triples:
-            write_jsonl(enrich_dir / "triples.jsonl", all_triples)
-            logger.info("Wrote %d triple records to enrich/triples.jsonl", len(all_triples))
-        ckpt.mark(unit_key, "enrich_triples")
+            if all_triples:
+                write_jsonl(enrich_dir / "triples.jsonl", all_triples)
+                logger.info("Wrote %d triple records to enrich/triples.jsonl", len(all_triples))
+            ckpt.mark(unit_key, "enrich_triples")
+        except Exception as exc:
+            logger.exception("Triples enrichment failed for %s", video_id)
+            write_failure(failures_dir, "enrich_triples", video_id, exc)
+            ckpt.mark(unit_key, "enrich_triples", status="FAILED")

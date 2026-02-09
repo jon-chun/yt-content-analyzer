@@ -7,16 +7,17 @@ from ..config import Settings
 
 
 def normalize_comments(
-    raw_comments: list[dict[str, Any]], video_id: str, cfg: Settings
+    raw_comments: list[dict[str, Any]],
+    video_id: str,
+    cfg: Settings,
+    sort_mode: str = "default",
 ) -> list[dict[str, Any]]:
-    """Normalize raw yt-dlp comments to the canonical schema.
+    """Normalize raw comments to the canonical schema.
 
     Schema fields: VIDEO_ID, COMMENT_ID, PARENT_ID, AUTHOR, TEXT,
                    LIKE_COUNT, REPLY_COUNT, PUBLISHED_AT, SORT_MODE, THREAD_DEPTH
 
-    yt-dlp specifics:
-    - SORT_MODE is always "default" (no top/newest support)
-    - REPLY_COUNT is always 0 (not provided by yt-dlp)
+    Supports raw dicts from both Playwright and yt-dlp collectors.
     """
     normalized: list[dict[str, Any]] = []
 
@@ -42,9 +43,9 @@ def normalize_comments(
             "AUTHOR": comment.get("author", ""),
             "TEXT": comment.get("text", ""),
             "LIKE_COUNT": comment.get("like_count", 0) or 0,
-            "REPLY_COUNT": 0,
+            "REPLY_COUNT": comment.get("reply_count", 0) or 0,
             "PUBLISHED_AT": published_at,
-            "SORT_MODE": "default",
+            "SORT_MODE": sort_mode,
             "THREAD_DEPTH": thread_depth,
         })
 
