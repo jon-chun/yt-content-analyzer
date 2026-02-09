@@ -151,7 +151,7 @@ class Settings(BaseSettings):
             "_default":                {"input": 2.00, "output": 12.00},
         },
         "xai": {
-            "grok-4-1-fast":  {"input": 0.20, "output": 0.50},
+            "grok-4-1-fast-non-reasoning":  {"input": 0.20, "output": 0.50},
             "_default":       {"input": 0.20, "output": 0.50},
         },
         "deepseek": {

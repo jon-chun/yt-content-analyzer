@@ -30,6 +30,7 @@ COLLECT_SORT_MODES: ["top", "newest"]
 MAX_COMMENTS_PER_VIDEO: 200000
 CAPTURE_ARTIFACTS_ON_ERROR: true
 CAPTURE_ARTIFACTS_ALWAYS: false
+ON_VIDEO_FAILURE: "skip"         # skip|abort — skip continues to next stage/video on error
 
 # =============================================================================
 # TRANSCRIPTS
@@ -139,7 +140,7 @@ PRICING_USD_PER_1M_TOKENS:
     text-embedding-004:     {input: 0.006, output: 0.0}
     _default:               {input: 2.00, output: 12.00}
   xai:
-    grok-4-1-fast:          {input: 0.20, output: 0.50}
+    grok-4-1-fast-non-reasoning: {input: 0.20, output: 0.50}
     _default:               {input: 0.20, output: 0.50}
   deepseek:
     deepseek-chat:          {input: 0.14, output: 0.28}
