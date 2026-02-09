@@ -147,6 +147,9 @@ class Settings(BaseSettings):
     # URL extraction
     URL_EXTRACTION_ENABLE: bool = True
 
+    # Output structure
+    OUTPUT_PER_VIDEO: bool = True       # True → per-video subdirs; False → flat
+
     # Reporting
     REPORT_VARIANTS: list[str] = ["all", "by-term", "by-vid"]
     RUN_DESC_4WORDS: str = "run_desc"

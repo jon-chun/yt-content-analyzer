@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import re
+
 import click
 from pathlib import Path
 
@@ -91,6 +93,10 @@ def preflight(ctx: click.Context, config_path: str, output_dir: str | None) -> N
     help="Override ON_VIDEO_FAILURE policy.",
 )
 @click.option(
+    "--channel", multiple=True,
+    help="Channel handle/URL (repeatable, shortcut for subscription mode).",
+)
+@click.option(
     "--subscriptions", is_flag=True, default=False,
     help="Run in subscription mode (use YT_SUBSCRIPTIONS from config).",
 )
@@ -108,6 +114,7 @@ def run_all_cmd(
     llm_provider: str | None,
     llm_model: str | None,
     on_failure: str | None,
+    channel: tuple[str, ...],
     subscriptions: bool,
 ) -> None:
     """Run the full collection + enrichment pipeline."""
@@ -136,6 +143,9 @@ def run_all_cmd(
 
     # --- Apply CLI overrides ---
     if video_url:
+        video_url = video_url.strip()
+        if re.match(r"^[\w-]{11}$", video_url):
+            video_url = f"https://www.youtube.com/watch?v={video_url}"
         cfg.VIDEO_URL = video_url
         cfg.SEARCH_TERMS = None
     elif terms:
@@ -154,6 +164,13 @@ def run_all_cmd(
         cfg.LLM_MODEL = llm_model
     if on_failure is not None:
         cfg.ON_VIDEO_FAILURE = on_failure
+
+    if channel:
+        cfg.YT_SUBSCRIPTIONS = [
+            {"CHANNEL": c, "MAX_SUB_VIDEOS": cfg.MAX_SUB_VIDEOS} for c in channel
+        ]
+        cfg.VIDEO_URL = None
+        cfg.SEARCH_TERMS = None
 
     if subscriptions:
         if not cfg.YT_SUBSCRIPTIONS:

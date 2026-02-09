@@ -22,10 +22,14 @@ def _new_run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
+_BARE_VIDEO_ID_RE = re.compile(r"^[\w-]{11}$")
+
+
 def extract_video_id(url: str) -> str:
-    """Extract YouTube video ID from various URL formats.
+    """Extract YouTube video ID from various URL formats or a bare 11-char ID.
 
     Supports:
+      - Bare 11-character video IDs (e.g. ``4jQChe0rg1c``)
       - https://www.youtube.com/watch?v=VIDEO_ID
       - https://youtube.com/watch?v=VIDEO_ID
       - https://youtu.be/VIDEO_ID
@@ -34,6 +38,9 @@ def extract_video_id(url: str) -> str:
 
     Raises ValueError if no video ID can be extracted.
     """
+    url = url.strip()
+    if _BARE_VIDEO_ID_RE.match(url):
+        return url
     patterns = [
         r"(?:youtube\.com/watch\?.*v=)([\w-]{11})",
         r"(?:youtu\.be/)([\w-]{11})",
@@ -81,8 +88,47 @@ def _build_video_list(cfg: Settings, out_dir: Path) -> list[dict[str, str]]:
                         len(all_videos), len(cfg.YT_SUBSCRIPTIONS))
         return all_videos
 
+    if cfg.SEARCH_TERMS:
+        from .discovery.search_resolver import resolve_search_videos
+
+        search_videos: list[dict[str, str]] = []
+        for term in cfg.SEARCH_TERMS:
+            try:
+                videos = resolve_search_videos(term, cfg.MAX_VIDEOS_PER_TERM, cfg)
+                search_videos.extend(videos)
+            except Exception as exc:
+                logger.error("Search failed for term %r: %s", term, exc)
+                if cfg.ON_VIDEO_FAILURE == "abort":
+                    raise CollectionError(
+                        f"Search failed for term {term!r}: {exc}"
+                    ) from exc
+
+        # Deduplicate by VIDEO_ID
+        seen: set[str] = set()
+        deduped: list[dict[str, str]] = []
+        for v in search_videos:
+            if v["VIDEO_ID"] not in seen:
+                seen.add(v["VIDEO_ID"])
+                deduped.append(v)
+        search_videos = deduped[:cfg.MAX_TOTAL_VIDEOS]
+
+        # Write discovery manifest
+        if search_videos:
+            disc_path = out_dir / "discovery" / "discovered_videos.jsonl"
+            write_jsonl(disc_path, search_videos, mode="w")
+            logger.info("Discovered %d videos from %d search terms",
+                        len(search_videos), len(cfg.SEARCH_TERMS))
+        return search_videos
+
     # No input mode matched
     return []
+
+
+def _video_out_dir(out_dir: Path, video_id: str, per_video: bool) -> Path:
+    """Return the output directory for a single video's data."""
+    if per_video:
+        return out_dir / "videos" / video_id
+    return out_dir
 
 
 def run_all(
@@ -179,18 +225,20 @@ def _process_single_video(
 ):
     """Run the collection + enrichment pipeline for a single video."""
     unit_key = video_id
+    vdir = _video_out_dir(out_dir, video_id, cfg.OUTPUT_PER_VIDEO)
+    vfailures = vdir / "failures" if cfg.OUTPUT_PER_VIDEO else failures_dir
 
     for stage_name, stage_fn in [
         ("transcript", lambda: _collect_and_process_transcript(
-            cfg, video_url, video_id, out_dir, ckpt, unit_key, result)),
+            cfg, video_url, video_id, vdir, ckpt, unit_key, result)),
         ("comments", lambda: _collect_and_process_comments(
-            cfg, video_url, video_id, out_dir, ckpt, unit_key, result, failures_dir)),
+            cfg, video_url, video_id, vdir, ckpt, unit_key, result, vfailures)),
     ]:
         try:
             stage_fn()
         except Exception as exc:
             logger.exception("Collection stage '%s' failed for %s", stage_name, video_id)
-            write_failure(failures_dir, stage_name, video_id, exc)
+            write_failure(vfailures, stage_name, video_id, exc)
             result.failures.append({
                 "stage": stage_name, "video_id": video_id, "error": str(exc),
             })
@@ -202,7 +250,7 @@ def _process_single_video(
             logger.warning("Skipping failed stage '%s' for %s (ON_VIDEO_FAILURE=skip)",
                            stage_name, video_id)
 
-    _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, result, failures_dir)
+    _enrich_video(cfg, video_id, vdir, ckpt, unit_key, result, vfailures)
     result.videos_processed += 1
 
     logger.info("Pipeline complete for video %s", video_id)

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-yt-content-analyzer is a scrape-first YouTube comments + transcripts collection and analysis tool for moderate academic research scale (10–500 videos). Given a URL, search terms, or channel subscriptions, it collects comments (Top/Newest sort), transcripts (manual preferred, auto fallback), enriches via NLP/LLM pipelines, and produces JSONL datasets plus Markdown reports. The single-video pipeline and subscription-based multi-video pipeline are functional end-to-end; search-term-based discovery is scaffolded but not yet implemented.
+yt-content-analyzer is a scrape-first YouTube comments + transcripts collection and analysis tool for moderate academic research scale (10–500 videos). Given a URL, search terms, or channel subscriptions, it collects comments (Top/Newest sort), transcripts (manual preferred, auto fallback), enriches via NLP/LLM pipelines, and produces JSONL datasets plus Markdown reports. The single-video pipeline, subscription-based multi-video pipeline, and search-term discovery are all functional end-to-end.
 
 ## Commands
 
@@ -34,10 +34,15 @@ mypy src/
 # CLI
 ytca preflight --config config.yml
 ytca run-all --config config.yml --video-url "https://www.youtube.com/watch?v=VIDEO_ID"
+ytca run-all --config config.yml --video-url "4jQChe0rg1c"   # bare video ID
 ytca run-all --resume 20260101T120000Z
 
 # Subscription mode (fetch latest videos from channels)
 ytca run-all --config config.yml --subscriptions
+ytca run-all --config config.yml --channel "@engineerprompt" --channel "@firaborova"
+
+# Search term discovery
+ytca run-all --config config.yml --terms "Claude CoWork" --terms "AI agents"
 ```
 
 ## Architecture
@@ -46,7 +51,7 @@ ytca run-all --config config.yml --subscriptions
 
 **Pipeline stages** (checkpointed per `(VIDEO_ID, STAGE)`):
 1. **Preflight** (`preflight/`) — multi-level config validation, endpoint probes, fail-fast
-2. **Discovery** (`discovery/`) — channel subscriptions (yt-dlp) or search terms → video list
+2. **Discovery** (`discovery/`) — channel subscriptions or search terms (both via yt-dlp) → video list
 3. **Collection** (`collectors/`) — comments + transcripts with provider fallback chains:
    - Comments: Playwright UI → yt-dlp → YouTube Data API v3
    - Transcripts: transcript extractor lib → yt-dlp subtitles → Playwright UI
@@ -55,7 +60,7 @@ ytca run-all --config config.yml --subscriptions
 6. **Reporting** (`reporting/`) — Jinja2 Markdown reports *(scaffolded)*
 7. **Knowledge Graph** (`knowledge_graph/`) — RDFLib+NetworkX+PyVis *(scaffolded)*
 
-**Orchestrator:** `run.py` — `run_all()` drives the full pipeline, building a video list (single URL, subscriptions, or search terms) and processing each video through collection + enrichment. Run directory: `runs/<RUN_ID>/` with subdirs: `logs/`, `comments/`, `transcripts/`, `enrich/`, `failures/`, `reports/`, `state/`, `discovery/`.
+**Orchestrator:** `run.py` — `run_all()` drives the full pipeline, building a video list (single URL, subscriptions, or search terms) and processing each video through collection + enrichment. When `OUTPUT_PER_VIDEO` is true (default), each video's data goes to `runs/<RUN_ID>/videos/<VID>/`; when false, uses flat layout under `runs/<RUN_ID>/`.
 
 **Key modules:**
 - `config.py` — Pydantic Settings model with ALL_CAPS keys. Precedence: defaults → YAML → env vars → CLI overrides. Resolved config persisted to `manifest.json`.
@@ -81,6 +86,7 @@ YTCAError (base)
 - Hard caps enforced: `MAX_VIDEOS_PER_TERM <= 10`, `MAX_TOTAL_VIDEOS <= 500`.
 - `VIDEO_URL`, `SEARCH_TERMS`, and `YT_SUBSCRIPTIONS` are mutually exclusive inputs.
 - `ON_VIDEO_FAILURE`: `"skip"` (default, log + continue) or `"abort"` (halt immediately).
+- `OUTPUT_PER_VIDEO`: `true` (default) → per-video subdirs; `false` → flat layout.
 - See `config.example.yml` for all available keys with defaults.
 
 ## Tests
@@ -94,6 +100,7 @@ Tests live in `tests/` using pytest. No conftest or fixtures beyond standard lib
 - `test_enrichment.py` — enrichment pipeline
 - `test_api_connectivity.py` — live API probes (skipped if keys missing)
 - `test_subscriptions.py` — subscription mode: config, channel resolver, preflight, CLI
+- `test_input_modes.py` — bare video IDs, --channel CLI, search discovery, per-video output
 
 ## Style
 

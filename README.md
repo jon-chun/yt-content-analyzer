@@ -12,7 +12,7 @@ Given a YouTube URL, a set of search terms, or a list of channel subscriptions, 
 |---------|--------|
 | Single-video pipeline (URL) | Functional end-to-end |
 | Subscription mode (channels) | Functional end-to-end |
-| Search-term discovery | Scaffolded |
+| Search-term discovery | Functional |
 | Comment collection (Playwright + yt-dlp fallback) | Functional |
 | Transcript collection (yt-dlp) | Functional |
 | Enrichment (topics, sentiment, triples, summarization, URL extraction) | Functional |
@@ -81,6 +81,7 @@ The config file uses **ALL_CAPS** keys organized into sections:
 | **NLP**              | `TM_CLUSTERING` (nlp or llm), `SA_GRANULARITY`, `STRIP_PII`                         |
 | **Summarization**    | `SUMMARY_ENABLE`, `SUMMARY_MAX_ITEMS`, `SUMMARY_MAX_RESPONSE_TOKENS`                 |
 | **URL extraction**   | `URL_EXTRACTION_ENABLE`                                                               |
+| **Output structure** | `OUTPUT_PER_VIDEO` (true → per-video subdirs, false → flat)                           |
 | **Error handling**   | `ON_VIDEO_FAILURE` (`skip` or `abort`), `MAX_RETRY_SCRAPE`                           |
 | **Reporting**        | `REPORT_VARIANTS`, `RUN_DESC_4WORDS`                                                 |
 
@@ -131,15 +132,16 @@ Preflight validates config invariants (including input mutual exclusivity and su
 
 #### 1. Single video URL
 
-Set `VIDEO_URL` in your config or pass it on the command line:
+Set `VIDEO_URL` in your config or pass it on the command line. Both full URLs and bare 11-character video IDs are accepted:
 
 ```bash
 ytca run-all --config config.yml --video-url "https://www.youtube.com/watch?v=VIDEO_ID"
+ytca run-all --config config.yml --video-url "4jQChe0rg1c"
 ```
 
 #### 2. Channel subscriptions
 
-Define channels in your config file and use the `--subscriptions` flag:
+Define channels in your config file and use the `--subscriptions` flag, or use the `--channel` shortcut:
 
 ```yaml
 # config.yml
@@ -152,7 +154,11 @@ MAX_SUB_VIDEOS: 3   # global default when not specified per channel
 ```
 
 ```bash
+# Via config
 ytca run-all --config config.yml --subscriptions
+
+# Via CLI shortcut (repeatable)
+ytca run-all --config config.yml --channel "@engineerprompt" --channel "@firaborova"
 ```
 
 The subscription resolver uses yt-dlp to fetch the latest N videos from each channel's `/videos` page. Discovered videos are written to `discovery/discovered_videos.jsonl` in the run directory. Channel handles (`@handle`), channel IDs (`UC...`), and full URLs are all accepted.
@@ -163,7 +169,7 @@ The subscription resolver uses yt-dlp to fetch the latest N videos from each cha
 ytca run-all --config config.yml --terms "AI agents 2026" --terms "robotics policy"
 ```
 
-The `--terms` flag overrides `SEARCH_TERMS` in the config file. Pass multiple `--terms` for multi-topic collection. *(Search-term discovery is scaffolded but not yet implemented.)*
+The `--terms` flag overrides `SEARCH_TERMS` in the config file. Pass multiple `--terms` for multi-topic collection. The search resolver uses yt-dlp's `ytsearch` to discover videos matching each term. Results are deduplicated by video ID and capped at `MAX_TOTAL_VIDEOS`.
 
 ### Resuming an interrupted run
 
@@ -193,8 +199,9 @@ ytca run-all --resume 20260208T235833Z --config updated_config.yml
 | Flag | Description |
 |------|-------------|
 | `--config` | Path to YAML config file (required for new runs) |
-| `--video-url` | Single YouTube video URL (overrides config) |
+| `--video-url` | Single YouTube video URL or bare 11-char video ID (overrides config) |
 | `--terms` | Search terms (repeatable, overrides config) |
+| `--channel` | Channel handle/URL (repeatable, shortcut for subscription mode) |
 | `--subscriptions` | Run in subscription mode using `YT_SUBSCRIPTIONS` from config |
 | `--output-dir` | Base directory for run outputs (default: `./runs`) |
 | `--resume` | Resume a previous run by RUN_ID |
@@ -232,33 +239,68 @@ Each stage is checkpointed per `(VIDEO_ID, STAGE)` so interrupted runs resume wi
 
 Each run produces a self-contained directory under `runs/`. Every output is append-safe JSONL or standalone JSON, so a crashed run leaves valid partial data that a resume can build on.
 
+**Per-video layout** (default, `OUTPUT_PER_VIDEO: true`):
+
 ```
 runs/<RUN_ID>/
-  manifest.json                  # Resolved config snapshot (JSON, for reproducibility)
+  manifest.json
   logs/
-    run.log                      # Full execution log (JSON-lines, one object per entry)
+    run.log
   discovery/
-    discovered_videos.jsonl      # Videos resolved from subscriptions (subscription mode only)
-  transcripts/
-    transcript_segments.jsonl    # Raw normalized segments (one per caption line)
-    transcript_chunks.jsonl      # Time-windowed chunks (60s window, 10s overlap)
-  comments/
-    comments_top.jsonl           # Per-sort-mode raw comments
-    comments_newest.jsonl
-    comments.jsonl               # Deduplicated merged comments (flat, with reply threading)
-  enrich/
-    topics.jsonl                 # Topic clusters per asset type (NLP or LLM)
-    sentiment.jsonl              # Per-item polarity + score
-    triples.jsonl                # Subject-predicate-object triples (LLM only)
-    urls.jsonl                   # Aggregated URLs with mention counts (regex, no LLM)
-    summary.jsonl                # Per-asset-type content summaries (LLM only)
-  failures/                      # Per-stage failure records (JSON, created on error)
-    <stage>_<video_id>.json      #   e.g. comments_abc123.json
+    discovered_videos.jsonl
+  videos/
+    <VIDEO_ID>/
+      transcripts/
+        transcript_segments.jsonl
+        transcript_chunks.jsonl
+      comments/
+        comments_top.jsonl
+        comments_newest.jsonl
+        comments.jsonl
+      enrich/
+        topics.jsonl
+        sentiment.jsonl
+        triples.jsonl
+        urls.jsonl
+        summary.jsonl
+      failures/
+        <stage>_<video_id>.json
   reports/
-    preflight_<RUN_ID>.md        # Preflight diagnostics
-    preflight_<RUN_ID>.json      # Machine-readable preflight results
+    preflight_<RUN_ID>.md
+    preflight_<RUN_ID>.json
   state/
-    checkpoint.json              # Resume state (per-video, per-stage)
+    checkpoint.json
+```
+
+**Flat layout** (`OUTPUT_PER_VIDEO: false`):
+
+```
+runs/<RUN_ID>/
+  manifest.json
+  logs/
+    run.log
+  discovery/
+    discovered_videos.jsonl
+  transcripts/
+    transcript_segments.jsonl
+    transcript_chunks.jsonl
+  comments/
+    comments_top.jsonl
+    comments_newest.jsonl
+    comments.jsonl
+  enrich/
+    topics.jsonl
+    sentiment.jsonl
+    triples.jsonl
+    urls.jsonl
+    summary.jsonl
+  failures/
+    <stage>_<video_id>.json
+  reports/
+    preflight_<RUN_ID>.md
+    preflight_<RUN_ID>.json
+  state/
+    checkpoint.json
 ```
 
 **Format conventions:**
@@ -368,6 +410,7 @@ twine check dist/*
 | `test_comments_playwright.py` | Playwright comment collector (heavily mocked) |
 | `test_enrichment.py` | Enrichment pipeline (topics, sentiment, triples, URL extraction, summarization) |
 | `test_subscriptions.py` | Subscription mode: config parsing, channel resolver, preflight, CLI |
+| `test_input_modes.py` | Bare video IDs, --channel CLI, search discovery, per-video output |
 | `test_api_connectivity.py` | Live API probes (skipped if keys missing) |
 
 ## License

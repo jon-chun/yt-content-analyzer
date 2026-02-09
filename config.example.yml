@@ -133,6 +133,12 @@ SUMMARY_MAX_RESPONSE_TOKENS: 1024   # max tokens for the LLM summary response
 URL_EXTRACTION_ENABLE: true
 
 # =============================================================================
+# OUTPUT STRUCTURE
+# =============================================================================
+OUTPUT_PER_VIDEO: true              # true → runs/<ID>/videos/<VID>/{comments,transcripts,enrich}
+                                    # false → flat: runs/<ID>/{comments,transcripts,enrich}
+
+# =============================================================================
 # REPORTING
 # =============================================================================
 REPORT_VARIANTS: ["all", "by-term", "by-vid"]
