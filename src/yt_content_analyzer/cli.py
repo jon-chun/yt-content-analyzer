@@ -90,6 +90,10 @@ def preflight(ctx: click.Context, config_path: str, output_dir: str | None) -> N
     "--on-failure", type=click.Choice(["skip", "abort"]), default=None,
     help="Override ON_VIDEO_FAILURE policy.",
 )
+@click.option(
+    "--subscriptions", is_flag=True, default=False,
+    help="Run in subscription mode (use YT_SUBSCRIPTIONS from config).",
+)
 @click.pass_context
 def run_all_cmd(
     ctx: click.Context,
@@ -104,6 +108,7 @@ def run_all_cmd(
     llm_provider: str | None,
     llm_model: str | None,
     on_failure: str | None,
+    subscriptions: bool,
 ) -> None:
     """Run the full collection + enrichment pipeline."""
     from .run import run_all
@@ -149,6 +154,15 @@ def run_all_cmd(
         cfg.LLM_MODEL = llm_model
     if on_failure is not None:
         cfg.ON_VIDEO_FAILURE = on_failure
+
+    if subscriptions:
+        if not cfg.YT_SUBSCRIPTIONS:
+            raise click.BadParameter(
+                "YT_SUBSCRIPTIONS must be set in config when using --subscriptions",
+                param_hint="--subscriptions",
+            )
+        cfg.VIDEO_URL = None
+        cfg.SEARCH_TERMS = None
 
     # --- Run ---
     try:

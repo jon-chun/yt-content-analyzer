@@ -527,7 +527,8 @@ class TestFallbackChain:
             "yt_content_analyzer.collectors.comments_ytdlp": mock_ytdlp_mod,
         }):
             _collect_and_process_comments(
-                cfg, "test12345", out_dir, ckpt, "test12345", result, failures_dir
+                cfg, cfg.VIDEO_URL, "test12345", out_dir, ckpt, "test12345",
+                result, failures_dir,
             )
 
         # Should have written per-mode and merged files
@@ -585,7 +586,8 @@ class TestSortModeLoop:
             },
         ):
             _collect_and_process_comments(
-                cfg, "test12345", out_dir, ckpt, "test12345", result, failures_dir
+                cfg, cfg.VIDEO_URL, "test12345", out_dir, ckpt, "test12345",
+                result, failures_dir,
             )
 
         # Should have: per-mode file for "top", per-mode file for "newest", merged

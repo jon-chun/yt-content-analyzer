@@ -47,6 +47,42 @@ def extract_video_id(url: str) -> str:
     raise ValueError(f"Cannot extract video ID from URL: {url}")
 
 
+def _build_video_list(cfg: Settings, out_dir: Path) -> list[dict[str, str]]:
+    """Build the list of videos to process based on the input mode.
+
+    Returns a list of dicts with keys: VIDEO_URL, VIDEO_ID, TITLE (optional).
+    """
+    if cfg.VIDEO_URL:
+        video_id = extract_video_id(cfg.VIDEO_URL)
+        return [{"VIDEO_URL": cfg.VIDEO_URL, "VIDEO_ID": video_id, "TITLE": ""}]
+
+    if cfg.YT_SUBSCRIPTIONS:
+        from .discovery.channel_resolver import resolve_channel_videos
+
+        all_videos: list[dict[str, str]] = []
+        for entry in cfg.YT_SUBSCRIPTIONS:
+            channel = entry["CHANNEL"]
+            max_vids = entry.get("MAX_SUB_VIDEOS", cfg.MAX_SUB_VIDEOS)
+            try:
+                videos = resolve_channel_videos(channel, max_vids, cfg)
+                all_videos.extend(videos)
+            except Exception as exc:
+                logger.error("Failed to resolve channel %s: %s", channel, exc)
+                if cfg.ON_VIDEO_FAILURE == "abort":
+                    raise
+
+        # Write discovery manifest
+        if all_videos:
+            disc_path = out_dir / "discovery" / "discovered_videos.jsonl"
+            write_jsonl(disc_path, all_videos, mode="w")
+            logger.info("Discovered %d videos from %d channels",
+                        len(all_videos), len(cfg.YT_SUBSCRIPTIONS))
+        return all_videos
+
+    # No input mode matched
+    return []
+
+
 def run_all(
     cfg: Settings,
     *,
@@ -108,45 +144,61 @@ def run_all(
 
     failures_dir = out_dir / "failures"
 
-    # --- Single-video collection pipeline ---
-    if cfg.VIDEO_URL:
-        video_id = extract_video_id(cfg.VIDEO_URL)
-        unit_key = video_id
+    # --- Build video list ---
+    video_list = _build_video_list(cfg, out_dir)
 
-        # Collection stages with per-video error policy
-        for stage_name, stage_fn in [
-            ("transcript", lambda: _collect_and_process_transcript(
-                cfg, video_id, out_dir, ckpt, unit_key, result)),
-            ("comments", lambda: _collect_and_process_comments(
-                cfg, video_id, out_dir, ckpt, unit_key, result, failures_dir)),
-        ]:
-            try:
-                stage_fn()
-            except Exception as exc:
-                logger.exception("Collection stage '%s' failed for %s", stage_name, video_id)
-                write_failure(failures_dir, stage_name, video_id, exc)
-                result.failures.append({
-                    "stage": stage_name, "video_id": video_id, "error": str(exc),
-                })
-                ckpt.mark(unit_key, stage_name, status="FAILED")
-                if cfg.ON_VIDEO_FAILURE == "abort":
-                    raise
-                logger.warning("Skipping failed stage '%s' for %s (ON_VIDEO_FAILURE=skip)",
-                               stage_name, video_id)
-
-        _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, result, failures_dir)
-        result.videos_processed += 1
-
-        logger.info("Pipeline complete for video %s", video_id)
-    else:
+    if not video_list:
         logger.warning(
-            "No VIDEO_URL set. Discovery-based pipeline not yet implemented."
+            "No videos to process. Set VIDEO_URL, SEARCH_TERMS, or YT_SUBSCRIPTIONS."
+        )
+        return result
+
+    # --- Process each video ---
+    for video_entry in video_list:
+        video_url = video_entry["VIDEO_URL"]
+        video_id = video_entry["VIDEO_ID"]
+        _process_single_video(
+            cfg, video_url, video_id, out_dir, ckpt, result, failures_dir,
         )
 
     return result
 
 
-def _collect_and_process_transcript(cfg, video_id, out_dir, ckpt, unit_key, result):
+def _process_single_video(
+    cfg, video_url, video_id, out_dir, ckpt, result, failures_dir,
+):
+    """Run the collection + enrichment pipeline for a single video."""
+    unit_key = video_id
+
+    for stage_name, stage_fn in [
+        ("transcript", lambda: _collect_and_process_transcript(
+            cfg, video_url, video_id, out_dir, ckpt, unit_key, result)),
+        ("comments", lambda: _collect_and_process_comments(
+            cfg, video_url, video_id, out_dir, ckpt, unit_key, result, failures_dir)),
+    ]:
+        try:
+            stage_fn()
+        except Exception as exc:
+            logger.exception("Collection stage '%s' failed for %s", stage_name, video_id)
+            write_failure(failures_dir, stage_name, video_id, exc)
+            result.failures.append({
+                "stage": stage_name, "video_id": video_id, "error": str(exc),
+            })
+            ckpt.mark(unit_key, stage_name, status="FAILED")
+            if cfg.ON_VIDEO_FAILURE == "abort":
+                raise
+            logger.warning("Skipping failed stage '%s' for %s (ON_VIDEO_FAILURE=skip)",
+                           stage_name, video_id)
+
+    _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, result, failures_dir)
+    result.videos_processed += 1
+
+    logger.info("Pipeline complete for video %s", video_id)
+
+
+def _collect_and_process_transcript(
+    cfg, video_url, video_id, out_dir, ckpt, unit_key, result,
+):
     from .collectors.transcript_ytdlp import collect_transcript_ytdlp
     from .parse.normalize_transcripts import normalize_transcripts
     from .parse.chunk_transcripts import chunk_transcripts
@@ -162,7 +214,7 @@ def _collect_and_process_transcript(cfg, video_id, out_dir, ckpt, unit_key, resu
     # Collect
     logger.info("Collecting transcript for %s", video_id)
     t0 = time.time()
-    raw_transcript = collect_transcript_ytdlp(cfg.VIDEO_URL, cfg)
+    raw_transcript = collect_transcript_ytdlp(video_url, cfg)
     logger.info("Transcript collected in %.1fs (%d entries)",
                 time.time() - t0, len(raw_transcript.get("entries", [])))
     ckpt.mark(unit_key, "transcript_collect")
@@ -193,7 +245,9 @@ def _collect_and_process_transcript(cfg, video_id, out_dir, ckpt, unit_key, resu
     logger.info("Wrote %d transcript chunks to %s", len(chunks), chunk_path)
 
 
-def _collect_and_process_comments(cfg, video_id, out_dir, ckpt, unit_key, result, failures_dir):
+def _collect_and_process_comments(
+    cfg, video_url, video_id, out_dir, ckpt, unit_key, result, failures_dir,
+):
     from .parse.normalize_comments import normalize_comments
 
     if ckpt.is_done(unit_key, "comments_normalize"):
@@ -208,7 +262,10 @@ def _collect_and_process_comments(cfg, video_id, out_dir, ckpt, unit_key, result
         if ckpt.is_done(unit_key, sm_ckpt_key):
             # Already collected this sort mode — read from per-mode file
             per_mode_path = out_dir / "comments" / f"comments_{sort_mode}.jsonl"
-            all_normalized.extend(read_jsonl(per_mode_path))
+            rows = read_jsonl(per_mode_path)
+            # Filter to current video_id for multi-video runs
+            rows = [r for r in rows if r.get("VIDEO_ID") == video_id]
+            all_normalized.extend(rows)
             continue
 
         raw_comments = []
@@ -218,7 +275,7 @@ def _collect_and_process_comments(cfg, video_id, out_dir, ckpt, unit_key, result
             from .collectors.comments_playwright_ui import collect_comments_playwright_ui
             t0 = time.time()
             raw_comments = collect_comments_playwright_ui(
-                cfg.VIDEO_URL, cfg, sort_mode, artifact_dir=failures_dir,
+                video_url, cfg, sort_mode, artifact_dir=failures_dir,
             )
             logger.info(
                 "Playwright collected %d comments (%s sort) in %.1fs",
@@ -231,7 +288,7 @@ def _collect_and_process_comments(cfg, video_id, out_dir, ckpt, unit_key, result
             try:
                 from .collectors.comments_ytdlp import collect_comments_ytdlp
                 t0 = time.time()
-                raw_comments = collect_comments_ytdlp(cfg.VIDEO_URL, cfg)
+                raw_comments = collect_comments_ytdlp(video_url, cfg)
                 logger.info(
                     "yt-dlp fallback collected %d comments in %.1fs",
                     len(raw_comments), time.time() - t0,
@@ -284,9 +341,11 @@ def _enrich_video(cfg, video_id, out_dir, ckpt, unit_key, result, failures_dir):
     from .enrich.sentiment import analyze_sentiment
     from .enrich.triples import extract_triples
 
-    # Read collected data
-    comments = read_jsonl(out_dir / "comments" / "comments.jsonl")
-    chunks = read_jsonl(out_dir / "transcripts" / "transcript_chunks.jsonl")
+    # Read collected data, filtering to current video_id
+    all_comments = read_jsonl(out_dir / "comments" / "comments.jsonl")
+    comments = [c for c in all_comments if c.get("VIDEO_ID") == video_id]
+    all_chunks = read_jsonl(out_dir / "transcripts" / "transcript_chunks.jsonl")
+    chunks = [c for c in all_chunks if c.get("VIDEO_ID") == video_id]
     all_items = comments + chunks
 
     if not all_items:

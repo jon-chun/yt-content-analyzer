@@ -24,9 +24,29 @@ def run_preflight(cfg: Settings, output_dir: Optional[Path]) -> PreflightResult:
 
     # LEVEL 0: config invariants
     ok0 = True
-    if cfg.VIDEO_URL and cfg.SEARCH_TERMS:
+    input_modes = sum([
+        bool(cfg.VIDEO_URL),
+        bool(cfg.SEARCH_TERMS),
+        bool(cfg.YT_SUBSCRIPTIONS),
+    ])
+    if input_modes > 1:
         ok0 = False
-        record(0, "Mutually exclusive inputs", False, "Provide VIDEO_URL or SEARCH_TERMS, not both.")
+        record(
+            0, "Mutually exclusive inputs", False,
+            "Provide exactly one of VIDEO_URL, SEARCH_TERMS, or YT_SUBSCRIPTIONS.",
+        )
+    if cfg.YT_SUBSCRIPTIONS:
+        total_sub_videos = sum(
+            entry.get("MAX_SUB_VIDEOS", cfg.MAX_SUB_VIDEOS)
+            for entry in cfg.YT_SUBSCRIPTIONS
+        )
+        if total_sub_videos > cfg.MAX_TOTAL_VIDEOS:
+            ok0 = False
+            record(
+                0, "Subscription video cap", False,
+                f"Total subscription videos ({total_sub_videos}) exceeds "
+                f"MAX_TOTAL_VIDEOS ({cfg.MAX_TOTAL_VIDEOS}).",
+            )
     if (cfg.SEARCH_TERMS or []) and cfg.MAX_VIDEOS_PER_TERM > 10:
         ok0 = False
         record(0, "MAX_VIDEOS_PER_TERM cap", False, "Must be <= 10.")

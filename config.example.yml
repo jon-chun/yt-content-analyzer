@@ -3,9 +3,18 @@
 # =============================================================================
 # INPUTS
 # =============================================================================
-# Provide VIDEO_URL *or* SEARCH_TERMS, not both.
+# Provide exactly one of: VIDEO_URL, SEARCH_TERMS, or YT_SUBSCRIPTIONS.
 VIDEO_URL:
 SEARCH_TERMS: ["AI agents 2026"]
+
+# Subscription mode: fetch latest videos from YouTube channels.
+# Use with: ytca run-all --config config.yml --subscriptions
+# YT_SUBSCRIPTIONS:
+#   - CHANNEL: "@engineerprompt"
+#     MAX_SUB_VIDEOS: 3          # per-channel override (default: MAX_SUB_VIDEOS)
+#   - CHANNEL: "@firaborova"
+MAX_SUB_VIDEOS: 3               # global default per channel
+
 MAX_VIDEOS_PER_TERM: 10
 MAX_TOTAL_VIDEOS: 500
 

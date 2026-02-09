@@ -59,7 +59,7 @@ The goal was to make the package **dual-use**: importable as a Python library wi
 | `pyproject.toml` | Version 0.2.1 &rarr; 0.3.0 |
 | `CLAUDE.md` | Added new CLI switches and library usage examples |
 | `README.md` | Pipeline status, resume docs, error handling, output format reference |
-| `config.example.yaml` | Added `ON_VIDEO_FAILURE`, fixed xAI model name |
+| `config.example.yml` | Added `ON_VIDEO_FAILURE`, fixed xAI model name |
 | `tests/test_comments_playwright.py` | Updated to new function signatures |
 
 ---
@@ -217,7 +217,7 @@ from yt_content_analyzer import (
 ```python
 from yt_content_analyzer import run_all, Settings, load_settings, PreflightError
 
-cfg = load_settings("config.yaml")
+cfg = load_settings("config.yml")
 cfg.VIDEO_URL = "https://www.youtube.com/watch?v=abc123"
 
 try:
@@ -269,7 +269,7 @@ Resume mode reloads config from `manifest.json` and skips preflight. The CLI cat
 - **`__init__.py`** `__version__`: `0.3.0`
 - **`CLAUDE.md`** updated with new CLI switches and library usage
 - **`README.md`** rewritten with current pipeline status, resume instructions, error handling docs, output file format reference, and data loading examples
-- **xAI model name** corrected from `grok-4-1-fast` to `grok-4-1-fast-non-reasoning` across `config.py`, `config.example.yaml`, and `test_api_connectivity.py`
+- **xAI model name** corrected from `grok-4-1-fast` to `grok-4-1-fast-non-reasoning` across `config.py`, `config.example.yml`, and `test_api_connectivity.py`
 - **`User-Agent` header** added to `llm_client._post_json()` to prevent Cloudflare bot protection (error 1010) from blocking Python's default `Python-urllib/3.x` user agent on the xAI API
 
 ---

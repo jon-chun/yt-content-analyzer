@@ -156,7 +156,7 @@ In the manifest, record `FAILED_VIDEOS` with reasons. In reports, include a "Col
 
 **Gap:** A 500-video run can take hours. There is no way to preview what will be collected (how many videos matched, estimated comment counts, transcript availability) before committing to a full scrape.
 
-**Solution:** Add a `ytca dry-run --config config.yaml --terms "..."` CLI command that:
+**Solution:** Add a `ytca dry-run --config config.yml --terms "..."` CLI command that:
 1. Runs the discovery stage only (resolve search terms, apply filters).
 2. For each discovered video, fetch basic metadata (title, view count, comment count estimate, caption availability).
 3. Output a summary: total videos found, estimated comments, transcript availability ratio, estimated run time.
@@ -202,7 +202,7 @@ Add `PROGRESS_MODE` config key: `rich` (default, interactive terminal), `plain` 
 from yt_content_analyzer import run_all, load_settings
 from yt_content_analyzer.config import Settings
 
-cfg = load_settings("config.yaml")
+cfg = load_settings("config.yml")
 run_all(cfg)  # already exists
 
 # Add granular entry points:

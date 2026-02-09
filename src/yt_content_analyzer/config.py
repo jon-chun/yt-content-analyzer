@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     # Inputs
     VIDEO_URL: Optional[str] = None
     SEARCH_TERMS: Optional[list[str]] = None
+    YT_SUBSCRIPTIONS: Optional[list[dict[str, Any]]] = None
+    MAX_SUB_VIDEOS: int = 3
     MAX_VIDEOS_PER_TERM: int = 10
     MAX_TOTAL_VIDEOS: int = 500
 
@@ -61,6 +63,21 @@ class Settings(BaseSettings):
     def _validate_on_video_failure(cls, v: str) -> str:
         if v not in ("skip", "abort"):
             raise ValueError(f"ON_VIDEO_FAILURE must be 'skip' or 'abort', got {v!r}")
+        return v
+
+    @field_validator("YT_SUBSCRIPTIONS")
+    @classmethod
+    def _validate_yt_subscriptions(
+        cls, v: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]] | None:
+        if v is None:
+            return None
+        for i, entry in enumerate(v):
+            if "CHANNEL" not in entry:
+                raise ValueError(
+                    f"YT_SUBSCRIPTIONS[{i}] missing required key 'CHANNEL'"
+                )
+            entry.setdefault("MAX_SUB_VIDEOS", 3)
         return v
 
     # Transcripts

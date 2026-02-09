@@ -76,7 +76,7 @@ include = [
   "README.md",
   "LICENSE",
   "docs/**",
-  "config.example.yaml",
+  "config.example.yml",
   ".env.example",
   "tests/**",
 ]
