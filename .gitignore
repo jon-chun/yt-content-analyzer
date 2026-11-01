@@ -210,3 +210,8 @@ __marimo__/
 runs/
 .DS_Store
 config.test.yml
+
+# >>> env files (ai-swe-setup env-ignore): never commit .env*, except .env.example
+.env*
+!.env.example
+# <<< env files
